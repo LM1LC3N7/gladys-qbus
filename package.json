@@ -1,8 +1,8 @@
 {
-  "name": "gladys-integration-template-js",
-  "version": "1.0.0",
+  "name": "gladys-qbus",
+  "version": "0.1.0",
   "private": true,
-  "description": "Official starter template to build an external integration for Gladys Assistant with the JavaScript SDK.",
+  "description": "Gladys Assistant external integration for Qbus home automation controllers (CTD), over the local MQTT broker of the user. Unofficial, not affiliated with Qbus.",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -10,20 +10,23 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "node --test"
+    "test": "node --test",
+    "audit": "npm audit --omit=dev",
+    "validate:manifest": "npx --yes github:GladysAssistant/integration-store ."
   },
   "engines": {
     "node": ">=22"
   },
   "dependencies": {
-    "@gladysassistant/integration-sdk": "^0.15.0"
+    "@gladysassistant/integration-sdk": "^0.15.0",
+    "mqtt": "^5.16.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.12.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.13.0",
-    "prettier": "^3.9.9"
+    "prettier": "^3.9.10"
   },
   "license": "Apache-2.0"
 }

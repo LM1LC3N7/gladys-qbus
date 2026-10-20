@@ -1,67 +1,103 @@
-# Template de démonstration
+# Qbus pour Gladys Assistant
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Cette intégration apporte dans Gladys les sorties de vos contrôleurs
+domotiques **Qbus** (CTD 3.x, la domotique filaire du fabricant belge Qbus),
+**sur votre réseau local**, via la **passerelle MQTT Qbus** et **votre propre
+broker MQTT**. Rien ne passe par Internet.
+
+> Cette intégration n'a **jamais été testée avec une vraie installation
+> Qbus** : elle suit le protocole de qbusmqttapi, la bibliothèque écrite par
+> Qbus pour Home Assistant. Vos retours sont les bienvenus sur le forum. Non
+> officiel, sans lien avec Qbus.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+| Sortie Qbus                  | Dans Gladys                                                                                                 |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Relais (marche/arrêt)        | un interrupteur                                                                                             |
+| Variateur (analog)           | une lumière : marche/arrêt, luminosité                                                                      |
+| Lumière couleur (multicolor) | une lumière : marche/arrêt, luminosité, couleur                                                             |
+| Volet, store                 | un volet : ouvrir / fermer / stop, et sa position quand le contrôleur la donne                              |
+| Thermostat                   | la température de la pièce et la consigne (commandes de consigne **désactivées par défaut**, voir plus bas) |
+| Scène                        | un bouton poussoir « Lancer »                                                                               |
+| Jauge                        | un capteur : température, humidité, CO2, luminosité, pression, puissance, courant, tension, vent            |
+| Humidité, ventilation        | capteur d'humidité, capteur de CO2                                                                          |
+| Station météo                | température extérieure, luminosité, vent, pluie                                                             |
+
+Pas dans cette version : les sélecteurs (stepper), les régimes (préréglages)
+des thermostats et des ventilations, les lames des stores vénitiens, les
+effets des lumières couleur et les jauges cumulées (énergie, eau, gaz). Les
+volets et les thermostats ne sont jamais des interrupteurs : un « éteins
+tout » d'un assistant vocal ou d'une scène ne les atteint pas.
+
+## Avant de commencer
+
+1. Un broker MQTT sur votre réseau (Mosquitto, par exemple l'extension de
+   votre NAS, ou le broker du serveur Qbus).
+2. La **passerelle MQTT Qbus** (qbusMqttGw), installée et reliée à votre
+   contrôleur Qbus et à ce broker, comme l'explique Qbus sur
+   [iot.qbus.be](https://iot.qbus.be). Elle publie sous
+   `cloudapp/QBUSMQTTGW/...`.
+3. Dans Gladys, installez l'intégration depuis le store.
 
 ## Configuration
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+- **Adresse du broker MQTT** : l'adresse IP du broker (`192.168.1.20`,
+  port 1883), ou `mqtts://adresse:8883` en TLS.
+- **Utilisateur** et **Mot de passe** : ceux du broker, s'il en demande. Le
+  mot de passe est gardé par Gladys dans sa base, jamais réaffiché, et envoyé
+  seulement à votre broker. Il ne va jamais dans les journaux ni dans `/data`.
+- **Vérifier le certificat TLS** : activé par défaut ; à désactiver
+  seulement pour un broker au certificat auto-signé sur votre réseau.
+- **Numéro de série du contrôleur** : vide pour tous les contrôleurs de la
+  passerelle, ou le numéro d'un contrôleur (comme l'affiche Qbus System
+  Manager).
+- **Autoriser les commandes de consigne** : désactivé par défaut, voir plus
+  bas.
+- **Plafond des consignes** : 24 °C par défaut (16 à 30 °C).
+- **Intervalle minimum entre deux mesures** : 10 s par défaut. Marche/arrêt,
+  positions et consignes ne sont jamais retardés.
+- **Langue des messages** : français ou anglais.
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+Utilisez ensuite **Tester la connexion** : il indique combien de
+contrôleurs, de sorties et d'appareils la passerelle a. Les appareils
+apparaissent dans l'onglet **Découverte** de l'intégration : créez ceux que
+vous voulez.
 
-## Actions
+## Consignes de chauffage
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+Les thermostats Qbus pilotent le chauffage. Gladys affiche toujours leur
+température et leur consigne. **Changer une consigne depuis Gladys**
+(tableau de bord, scènes, assistants vocaux) est refusé tant que vous
+n'activez pas **Autoriser les commandes de consigne**. Une fois activé :
 
-## Scènes
+- la consigne reste entre 5 °C et le plafond de la configuration (24 °C par
+  défaut, jamais au-dessus de 30 °C), et dans les limites que le contrôleur
+  déclare pour le thermostat, par pas de 0,5 °C ;
+- l'intégration relit d'abord le thermostat et son contrôleur, décide
+  seulement sur cette relecture, et revérifie l'option et le plafond juste
+  avant l'envoi ;
+- la commande part dans les 3,5 s après le clic, ou elle est refusée, non
+  envoyée ;
+- si le contrôleur ne la confirme pas à temps, Gladys affiche « Commande
+  envoyée, sans confirmation » : vérifiez le thermostat un instant plus tard.
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+## Erreurs et limites
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+- Jamais testé avec un vrai appareil : signalez sur le forum ce qui ne
+  marche pas (avec les journaux de l'intégration).
+- Identifiants refusés par le broker : l'intégration s'arrête et réessaie
+  après 15 min, 1 h, 6 h, puis toutes les 24 h (conservé après un
+  redémarrage). Enregistrer d'autres identifiants ou **Tester la connexion**
+  réessaie tout de suite.
+- Broker injoignable : un nouvel essai toutes les 10 s.
+- Passerelle hors ligne, contrôleur déconnecté : le statut le dit, les
+  appareils apparaissent « injoignables » et les commandes sont refusées,
+  jamais mises en attente.
+- Gladys accepte 300 états par minute : les mesures sont espacées, le reste
+  part en premier.
 
-## Tableau de bord
+## Assistance
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
-
-## Dépannage
-
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+Questions et retours : le forum de la communauté Gladys. Code source et
+tickets : <https://github.com/LM1LC3N7/gladys-qbus>.

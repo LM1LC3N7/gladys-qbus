@@ -1,45 +1,143 @@
 // -----------------------------------------------------------------------------
-// Integration configuration.
-//
-// The configuration is filled in by the user in Gladys, from the `config_schema`
-// declared in `gladys-assistant-integration.json`. The SDK fetches it for you
-// (`gladys.getConfig()`) and notifies you of every change through
-// `gladys.onConfigUpdated()`.
-//
-// This module only provides defaults and normalizes the received object, so the
-// rest of the code never has to deal with `undefined`.
+// The configuration: the manifest `config_schema` values, normalized so the
+// rest of the code never deals with strings typed in a form. The password of
+// the broker is kept here and in the MQTT client only: never logged, never in
+// /data, never in a status or an error.
 // -----------------------------------------------------------------------------
 
-// Defaults: they MUST stay consistent with the `default` values declared in the
-// `config_schema` of the manifest.
+import { SENSOR_INTERVAL, SETPOINT } from './constants.js';
+
+/** Defaults, mirrored by the manifest (checked by test/manifest.test.js). */
 export const DEFAULT_CONFIG = {
-  latitude: 48.8566, // Paris
-  longitude: 2.3522,
-  unit: 'celsius', // 'celsius' | 'fahrenheit'
-  // Seconds between two reads of the polled sensors. Gladys polls at most once
-  // a minute: slower intervals are applied by skipping polls (see
-  // createPoller in src/devices/index.js).
-  poll_frequency: 300,
-  // Reserved key (NOT in config_schema): because the manifest declares both
-  // 'local' and 'cloud' in its `transports` field, Gladys shows a standard
-  // "Prefer the local connection" toggle and sends the user's choice here.
-  // Read-only for the integration; defaults to true.
-  GLADYS_PREFER_LOCAL: true,
+  broker_url: '',
+  username: '',
+  password: '',
+  verify_certificate: true,
+  controller_serial: '',
+  allow_setpoints: false,
+  max_setpoint: SETPOINT.ceilingDefault,
+  sensor_interval: SENSOR_INTERVAL.default,
+  language: 'fr',
 };
 
+const SCHEMES = ['mqtt:', 'mqtts:', 'ws:', 'wss:', 'tcp:', 'ssl:'];
+
+/** Only `true` (or the text "true") allows: anything else, missing included, refuses. */
+const strictTrue = (value) => value === true || value === 'true';
+/** Only `false` (or the text "false") turns off: a missing value keeps the safe default. */
+const strictFalse = (value) => value === false || value === 'false';
+
+/** A number typed in the form: a finite number, or undefined ('' and null are not 0). */
+export function numberOf(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+  if (typeof value === 'string' && /^\s*-?\d{1,6}(\.\d{1,6})?\s*$/.test(value)) {
+    return Number(value);
+  }
+  return undefined;
+}
+
 /**
- * Merge the user config with the defaults.
- * @param {Record<string, unknown>} raw config returned by the SDK
+ * The broker URL, completed: "192.168.1.10" -> "mqtt://192.168.1.10".
+ * @returns {{ url: string } | { error: string }}
  */
+export function parseBrokerUrl(raw) {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (text === '') {
+    return { error: 'empty' };
+  }
+  if (text.length > 300) {
+    return { error: 'invalid' };
+  }
+  const withScheme = /^[a-z]+:\/\//i.test(text) ? text : `mqtt://${text}`;
+  let url;
+  try {
+    url = new URL(withScheme);
+  } catch {
+    return { error: 'invalid' };
+  }
+  if (!SCHEMES.includes(url.protocol) || !url.hostname) {
+    return { error: 'invalid' };
+  }
+  if (url.username || url.password) {
+    // Credentials belong to their own fields (the secret one is never shown again).
+    return { error: 'credentials' };
+  }
+  return { url: url.toString().replace(/\/$/, '') };
+}
+
+/** The serial number of one controller (digits, as Qbus prints them), or undefined for all. */
+export function parseSerial(raw) {
+  const text = typeof raw === 'string' ? raw.trim() : '';
+  if (text === '') {
+    return { serial: undefined };
+  }
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(text)) {
+    return { error: 'invalid' };
+  }
+  return { serial: text };
+}
+
+/**
+ * The setpoint ceiling: whole degrees between SETPOINT.ceilingMin and
+ * SETPOINT.max, else the default (24 °C). Never above 30 °C, whatever was typed.
+ */
+export function ceilingOf(value) {
+  const number = numberOf(value);
+  if (number === undefined) {
+    return SETPOINT.ceilingDefault;
+  }
+  return Math.min(SETPOINT.max, Math.max(SETPOINT.ceilingMin, Math.floor(number)));
+}
+
 export function normalizeConfig(raw = {}) {
+  const c = { ...DEFAULT_CONFIG };
+  for (const [key, value] of Object.entries(raw ?? {})) {
+    if (Object.hasOwn(c, key) && value !== null && value !== undefined) {
+      c[key] = value;
+    }
+  }
+  const broker = parseBrokerUrl(c.broker_url);
+  const serial = parseSerial(c.controller_serial);
+  const interval = numberOf(c.sensor_interval);
+  const password = typeof c.password === 'string' ? c.password : '';
+  let problem = broker.error ? `broker:${broker.error}` : undefined;
+  if (!problem && serial.error) {
+    problem = 'serial';
+  } else if (!problem && password.length > 1024) {
+    problem = 'password';
+  }
   return {
-    ...DEFAULT_CONFIG,
-    ...raw,
-    // Force the types: config may arrive as strings from a form.
-    latitude: Number(raw.latitude ?? DEFAULT_CONFIG.latitude),
-    longitude: Number(raw.longitude ?? DEFAULT_CONFIG.longitude),
-    poll_frequency: Number(raw.poll_frequency ?? DEFAULT_CONFIG.poll_frequency),
-    // The preference is a boolean; anything but an explicit false means true.
-    GLADYS_PREFER_LOCAL: raw.GLADYS_PREFER_LOCAL !== false,
+    /** Why the configuration cannot be used (shown in the status), else undefined. */
+    problem,
+    brokerUrl: broker.url,
+    username: typeof c.username === 'string' ? c.username.trim().slice(0, 256) : '',
+    password: problem ? '' : password,
+    // TLS certificates are checked unless the user turns it off.
+    verifyCertificate: !strictFalse(c.verify_certificate),
+    serial: serial.serial,
+    allowSetpoints: strictTrue(c.allow_setpoints),
+    ceiling: ceilingOf(c.max_setpoint),
+    sensorInterval:
+      interval === undefined
+        ? SENSOR_INTERVAL.default
+        : Math.min(SENSOR_INTERVAL.max, Math.max(SENSOR_INTERVAL.min, Math.round(interval))),
+    language: c.language === 'en' ? 'en' : 'fr',
   };
 }
+
+/** What a reconnection to the broker depends on (compared in memory only, never stored). */
+export const connectionKey = (config) =>
+  JSON.stringify([
+    config.problem ?? null,
+    config.brokerUrl ?? null,
+    config.username,
+    config.password,
+    config.verifyCertificate,
+    config.serial ?? null,
+  ]);
+
+/** The credentials only: other credentials lift the stop on refused credentials. */
+export const credentialsKey = (config) =>
+  JSON.stringify([config.brokerUrl ?? null, config.username, config.password]);

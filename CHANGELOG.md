@@ -12,44 +12,19 @@ the notes of the version's GitHub Release.
 
 ### Added
 
-- A working example of scene triggers, scene actions and dashboard widgets
-  (Gladys 5.1.0 or later).
-- `CHANGELOG.md`, rolled by the Release workflow.
-- A GitHub Release for every version, with its changelog section as notes: the
-  Gladys Supervision page links each version to the repository's releases.
-- CI runs the tests on Node 22 and 24, and builds the Docker image.
-- Dependabot keeps the npm dependencies and the GitHub Actions up to date.
-- `SECURITY.md` (how to report a vulnerability) and `CLAUDE.md` (project rules
-  for contributors and coding assistants).
-- Manifest tests: `version` matches `package.json`, `docker_image` is tagged
-  with it, descriptions hold 10 to 100 characters, placeholders are
-  multi-language objects.
-- The latitude and longitude fields show an example value as placeholder.
-
-### Changed
-
-- Node.js 22 or later is required (Node 20 is end-of-life).
-- Integration SDK 0.15.0. The tests now run against the fake Gladys of the
-  SDK, which refuses the payloads Gladys refuses.
-- The refresh interval is one minute minimum, the fastest Gladys polls a
-  device. The plug's power is only sent when it changes, and every 30
-  minutes otherwise.
-
-### Fixed
-
-- Gladys refused the devices of the Discovery tab: the weather station and
-  the plug declared their poll frequency in seconds instead of one of the
-  values Gladys accepts, and were never polled. They now poll every minute,
-  and the readings follow the refresh interval of the configuration.
-
-- The release commit no longer fails `npm run format:check`: the Release
-  workflow updates the manifest `version` and `docker_image` in place instead
-  of re-printing the whole file with `jq`.
-- The integration can write to `/data`: the image creates the directory owned
-  by the `node` user, a new Docker volume was owned by root.
-- A sub-container running the integration's own image follows it to the new
-  tag at each release, as well as in the manifest of the build summary: it kept
-  the previous tag, which may not exist on the registry. Sub-containers on a
-  third-party image (a broker, a database...) keep theirs.
-
-[Unreleased]: https://github.com/GladysAssistant/integration-template-js/commits/main
+- Qbus controllers (CTD 3.x) through the Qbus MQTT gateway and the local MQTT
+  broker of the user: relays (switch), dimmers and colour lights (light),
+  shutters and blinds (open, close, stop, position), thermostats (room
+  temperature and setpoint), scenes (push button), gauges (temperature,
+  humidity, CO2, light, pressure, power, current, voltage, wind), humidity
+  and ventilation sensors, weather station (temperature, light, wind, rain).
+- Setpoint commands behind an option, off by default; setpoints from 5 °C to
+  a ceiling of 24 °C by default (16 to 30 °C, never above 30 °C), within the
+  limits of the thermostat. Decided on a fresh read of the thermostat and of
+  its controller, sent within 3.5 s or refused unsent, "sent, without
+  confirmation" when the controller stays silent.
+- Shutters and thermostats are never switches.
+- Credentials refused by the broker: a stop kept in `/data` (no secret
+  there), next tries 15 min, 1 h, 6 h, then every 24 h.
+- Transport badge per device (gateway offline, controller disconnected), a
+  "Test the connection" button, messages in French or English.
