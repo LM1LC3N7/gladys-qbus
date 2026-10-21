@@ -24,7 +24,10 @@ export const REFUSALS = {
   135: 'not authorized',
 };
 
-export function connectBroker(config, { connect = mqtt.connect } = {}) {
+export function connectBroker(
+  config,
+  { connect = mqtt.connect, reconnectPeriod = TIMINGS.reconnectPeriod } = {},
+) {
   return connect(config.brokerUrl, {
     username: config.username || undefined,
     password: config.password || undefined,
@@ -33,7 +36,11 @@ export function connectBroker(config, { connect = mqtt.connect } = {}) {
     clean: true,
     keepalive: 60,
     connectTimeout: TIMINGS.connectTimeout,
-    reconnectPeriod: TIMINGS.reconnectPeriod,
+    reconnectPeriod,
+    // A CONNACK refusal (1-3: protocol, identifier, server unavailable) is tried
+    // again like an unreachable broker; 4, 5, 134 and 135 (credentials) end the
+    // client in src/app.js, which spaces the next tries.
+    reconnectOnConnackError: true,
     rejectUnauthorized: config.verifyCertificate,
     protocolVersion: 4,
     resubscribe: false,

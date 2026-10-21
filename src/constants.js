@@ -15,6 +15,11 @@ export const TOPIC_PREFIX = 'cloudapp/QBUSMQTTGW';
 export const FEATURES = {
   /** On/off of a relay, a dimmer or a colour light. */
   POWER: 'power',
+  /** The read-only state of a relay or dimmer not declared safe, its level, and its buttons. */
+  STATE: 'state',
+  LEVEL: 'level',
+  TURN_ON: 'turn-on',
+  TURN_OFF: 'turn-off',
   BRIGHTNESS: 'brightness',
   COLOR: 'color',
   /** Shutter: open / close / stop, and its position. */
@@ -73,6 +78,8 @@ export const LIMITS = {
   /** What one gateway may hold: more is ignored. */
   controllers: 8,
   outputsPerController: 1000,
+  /** The core refuses a Discovery of more than 2000 devices (MAX_DISCOVERED_DEVICES). */
+  devices: 2000,
   /** Names are cut to this length. */
   nameLength: 60,
   /** Output ids sent in one getState request. */

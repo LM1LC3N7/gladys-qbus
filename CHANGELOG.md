@@ -13,7 +13,9 @@ the notes of the version's GitHub Release.
 ### Added
 
 - Qbus controllers (CTD 3.x) through the Qbus MQTT gateway and the local MQTT
-  broker of the user: relays (switch), dimmers and colour lights (light),
+  broker of the user: relays and dimmers (a switch or a light only when declared
+  safe, otherwise a read-only state with "Turn on" / "Turn off" buttons behind
+  an option off by default), colour lights (light),
   shutters and blinds (open, close, stop, position), thermostats (room
   temperature and setpoint), scenes (push button), gauges (temperature,
   humidity, CO2, light, pressure, power, current, voltage, wind), humidity
@@ -24,6 +26,8 @@ the notes of the version's GitHub Release.
   its controller, sent within 3.5 s or refused unsent, "sent, without
   confirmation" when the controller stays silent.
 - Shutters and thermostats are never switches.
+- One setpoint command at a time per thermostat; retained states ignored;
+  2000 devices at most; CONNACK refusals other than credentials tried again.
 - Credentials refused by the broker: a stop kept in `/data` (no secret
   there), next tries 15 min, 1 h, 6 h, then every 24 h.
 - Transport badge per device (gateway offline, controller disconnected), a

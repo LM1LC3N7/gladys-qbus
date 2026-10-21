@@ -91,7 +91,8 @@ export class QbusApp {
     this.created = new Set();
     this.timersById = {};
     this.waiters = new Set();
-    this.inFlight = undefined;
+    /** "<controller>/<output>" -> the setpoint command running on that thermostat */
+    this.inFlight = new Map();
     /** "<controller>/<output>" -> { expected, until } after a setpoint sent */
     this.guards = new Map();
     this.warned = new Set();
@@ -156,7 +157,7 @@ export class QbusApp {
   async gladysConnected(raw) {
     const next = normalizeConfig(raw);
     if (this.started && connectionKey(next) === this.connKey) {
-      this.applySoft(next);
+      this.applySoft(next, raw);
       this.lastStatus = undefined;
       this.publishedDevices = undefined;
       this.transports.clear();
@@ -176,17 +177,25 @@ export class QbusApp {
   async configUpdated(raw) {
     const next = normalizeConfig(raw);
     if (this.started && connectionKey(next) === this.connKey) {
-      const language = this.config.language;
-      this.applySoft(next);
-      if (language !== next.language) {
+      const before = this.config;
+      this.applySoft(next, raw);
+      if (
+        before.language !== next.language ||
+        [...before.safeOutputs].sort().join() !== [...next.safeOutputs].sort().join()
+      ) {
+        // Names, or which outputs are switches and lights: the devices are built again.
         await this.rebuild();
+      } else {
+        await this.updateStatus();
       }
       return;
     }
     await this.start(raw);
   }
 
-  applySoft(next) {
+  applySoft(next, raw) {
+    // The raw configuration too: a later restart (the test button) uses the latest one.
+    this.rawConfig = raw ?? {};
     this.config = next;
     this.publisher.configure({
       intervalSeconds: next.sensorInterval,
@@ -258,9 +267,9 @@ export class QbusApp {
         this.onConnect().catch((err) => this.logger.error(`After connection: ${err.message}`));
       }
     });
-    client.on('message', (topic, payload) => {
+    client.on('message', (topic, payload, packet) => {
       if (current()) {
-        this.onMessage(topic, payload);
+        this.onMessage(topic, payload, packet);
       }
     });
     client.on('error', (err) => {
@@ -272,7 +281,7 @@ export class QbusApp {
         this.onRefused(reason).catch((e) => this.logger.error(`After a refusal: ${e.message}`));
         return;
       }
-      this.logger.warn(`MQTT broker: ${reason}`);
+      this.warnOnce(`broker:${reason}`, `MQTT broker: ${reason}`);
       this.setStatus(false, T.unreachable(reason));
     });
     client.on('close', () => {
@@ -380,14 +389,24 @@ export class QbusApp {
     if (this.controllers.length === 0) {
       return this.setStatus(false, T.noController(this.config.serial));
     }
-    return this.setStatus(true, T.connected(this.controllers.length, this.model.devices.length));
+    return this.setStatus(
+      true,
+      T.connected(this.controllers.length, this.model.devices.length, {
+        invalid: this.config.invalidOutputs,
+        capped: this.model.capped,
+      }),
+    );
   }
 
   // --- Messages --------------------------------------------------------------------
 
-  onMessage(topic, payload) {
+  onMessage(topic, payload, packet) {
     const info = parseTopic(topic);
     if (!info) {
+      return;
+    }
+    if (packet?.retain && (info.kind === 'output' || info.kind === 'controller')) {
+      // Kept by the broker, maybe from long ago (the gateway stopped since): not a current state.
       return;
     }
     if (info.kind === 'config') {
@@ -530,7 +549,14 @@ export class QbusApp {
       externalIds: (type, id) => this.gladys.externalIds(type, id),
       controllers: this.controllers,
       language: this.config.language,
+      safeOutputs: this.config.safeOutputs,
     });
+    if (this.model.capped > 0) {
+      this.warnOnce(
+        `capped:${this.model.capped}`,
+        `More than 2000 devices: ${this.model.capped} output(s) left out`,
+      );
+    }
     this.publisher.configure({
       intervalSeconds: this.config.sensorInterval,
       throttled: this.model.throttled,
@@ -666,10 +692,10 @@ export class QbusApp {
   // --- Waiting for an answer of the gateway ------------------------------------------------
 
   /** Resolves true when a message of `key` matches `predicate`, false at `deadline`. */
-  waitFor(key, predicate, deadline) {
+  waitFor(key, predicate, deadline, group) {
     let waiter;
     const promise = new Promise((resolve) => {
-      waiter = { key, predicate, resolve, value: undefined };
+      waiter = { key, predicate, resolve, group, value: undefined };
       waiter.timer = this.timers.setTimeout(
         () => this.settleWaiter(waiter, false),
         Math.max(0, deadline - this.now()),
@@ -695,9 +721,12 @@ export class QbusApp {
     }
   }
 
-  failWaiters() {
+  /** Settles the waiters of one command (`group`), or all of them (the connection is gone). */
+  failWaiters(group) {
     for (const waiter of [...this.waiters]) {
-      this.settleWaiter(waiter, false);
+      if (group === undefined || waiter.group === group) {
+        this.settleWaiter(waiter, false);
+      }
     }
   }
 
@@ -731,8 +760,15 @@ export class QbusApp {
     if (spec.setpoint) {
       return this.setpoint(output, value, received);
     }
+    if (spec.refusal) {
+      // A switch or a light kept from before, of an output no longer declared safe.
+      throw this.refusal(ERRORS[spec.refusal]);
+    }
     if (spec.readOnly || typeof spec.write !== 'function') {
       throw this.refusal(ERRORS.readOnly);
+    }
+    if (spec.gate === 'outputButtons' && !this.config.allowOutputButtons) {
+      throw this.refusal(ERRORS.buttonsDisabled);
     }
     let body;
     try {
@@ -748,6 +784,9 @@ export class QbusApp {
     this.logger.debug(`Qbus ${output.type} ${output.ref}: ${spec.role}`);
     // Lights, relays, shutters, scenes: sent at once. Stop and close are never held behind anything.
     await this.send(request, received + TIMINGS.commandAnswerBy);
+    if (body.unconfirmed) {
+      throw this.refusal(ERRORS.sentUnconfirmed);
+    }
   }
 
   /** Publishes a command; the ack never waits past `answerBy`. */
@@ -796,8 +835,11 @@ export class QbusApp {
       throw this.refusal(ERRORS.setpointsDisabled);
     }
     const { low, high } = this.bounds(output);
-    if (low > high || wanted < low || wanted > high) {
-      throw this.refusal(ERRORS.outOfRange(low, Math.max(low, high)));
+    if (low > high) {
+      throw this.refusal(ERRORS.ceilingBelowMin(low, this.config.ceiling));
+    }
+    if (wanted < low || wanted > high) {
+      throw this.refusal(ERRORS.outOfRange(low, high));
     }
   }
 
@@ -814,16 +856,18 @@ export class QbusApp {
       throw this.refusal(ERRORS.badStep(step));
     }
     this.checkSetpoint(output, wanted);
-    if (this.inFlight) {
+    // One command at a time per thermostat; other thermostats are never held.
+    const key = `${output.controller.id}/${output.id}`;
+    if (this.inFlight.has(key)) {
       throw this.refusal(ERRORS.stillRunning);
     }
     const promise = this.setpointCommand(output, wanted, received);
-    this.inFlight = promise;
+    this.inFlight.set(key, promise);
     try {
       return await promise;
     } finally {
-      if (this.inFlight === promise) {
-        this.inFlight = undefined;
+      if (this.inFlight.get(key) === promise) {
+        this.inFlight.delete(key);
       }
     }
   }
@@ -839,6 +883,8 @@ export class QbusApp {
     const key = `${output.controller.id}/${output.id}`;
     const sendBy = received + TIMINGS.commandSendBy;
     const answerBy = received + TIMINGS.commandAnswerBy;
+    // The waiters of this command only: another thermostat's are never settled by it.
+    const group = Symbol(key);
     /** The checks before sending, on the latest configuration and state. */
     const check = () => {
       this.checkSetpoint(output, wanted);
@@ -862,8 +908,9 @@ export class QbusApp {
       `controller:${output.controller.id}`,
       (m) => typeof m.connected === 'boolean',
       readBy,
+      group,
     );
-    const outputRead = this.waitFor(key, (m) => m.type === 'state', readBy);
+    const outputRead = this.waitFor(key, (m) => m.type === 'state', readBy, group);
     try {
       for (const request of [
         ...stateRequests([output.controller.id]),
@@ -872,7 +919,7 @@ export class QbusApp {
         await publish(client, request.topic, request.payload);
       }
     } catch (err) {
-      this.failWaiters();
+      this.failWaiters(group);
       throw this.refusal(ERRORS.notSent(errorReason(err)));
     }
     const [controller, fresh] = await Promise.all([controllerRead, outputRead]);
@@ -903,12 +950,13 @@ export class QbusApp {
         typeof m.properties?.get('setTemp') === 'number' &&
         near(m.properties.get('setTemp'), wanted),
       answerBy,
+      group,
     );
     // beforeSend: the very last check, right before the message leaves.
     try {
       check();
     } catch (err) {
-      this.failWaiters();
+      this.failWaiters(group);
       throw err;
     }
     this.logger.info(`Qbus setpoint ${output.controller.serial}-${output.ref}: ${wanted} °C`);
@@ -936,7 +984,10 @@ export class QbusApp {
    * it has. At most every 10 s.
    */
   async testConnection() {
-    const config = this.config;
+    // The saved configuration as it is now (never an older copy: an option turned
+    // off since must stay off after the restart below).
+    const raw = await this.gladys.getConfig().catch(() => this.rawConfig ?? {});
+    const config = normalizeConfig(raw);
     if (config.problem) {
       return T.problem(config.problem);
     }
@@ -996,6 +1047,7 @@ export class QbusApp {
         const model = buildModel({
           externalIds: (type, id) => this.gladys.externalIds(type, id),
           controllers,
+          safeOutputs: config.safeOutputs,
         });
         const outputs = controllers.reduce((n, c) => n + c.outputs.length, 0);
         finish({ text: TEST.ok(controllers.length, outputs, model.devices.length), reached: true });
@@ -1015,7 +1067,7 @@ export class QbusApp {
       // The credentials work again: the stop is lifted and the integration reconnects.
       this.memory.auth = { failures: 0, until: 0 };
       await this.saveMemory();
-      await this.start(this.rawConfig ?? {});
+      await this.start(raw);
     }
     return answer.text;
   }

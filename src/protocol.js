@@ -135,6 +135,7 @@ function parseOutput(raw, controller) {
     limits: {
       value: limitsOf(own(properties, 'value')),
       setTemp: limitsOf(own(properties, 'setTemp')),
+      currentValue: limitsOf(own(properties, 'currentValue')),
     },
     unit:
       typeof own(own(properties, 'currentValue'), 'unit') === 'string'

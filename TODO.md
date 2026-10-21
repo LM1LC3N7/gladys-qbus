@@ -2,7 +2,7 @@
 
 ## Status
 
-Milestone 1 (0.1.0, local commit, not pushed): the outputs of the Qbus
+Milestone 1 (0.1.0, local commits, not pushed; review 1 fixed): the outputs of the Qbus
 controllers read and controlled through the Qbus MQTT gateway and the broker
 of the user; setpoints behind an off-by-default option, bounded. Never tested
 with a real Qbus installation nor a real gateway. The store validator
@@ -32,10 +32,48 @@ container (no Docker on the development PC).
   "10", "000001/105/3" -> "105-3"), as Home Assistant keys its entities. An
   output without a readable ref is not offered (no stable id). The output id
   of the gateway ("UL10") is only used for the topics.
-- **Relays are switches** (`switch/binary`), as Home Assistant maps them:
-  they mostly drive lights and sockets. A relay that drives a pump or a
-  heater should be left out of "turn everything off" scenes by the user
-  (documented). To revisit if users ask for a read-only mode per output.
+- **Relays and dimmers: switches and lights only when declared safe**
+  (review 1, B1 and I5; Louis's rule, models gladys-blebox and gladys-homee).
+  A Qbus onoff or analog output may drive a circulator, the boiler demand, a
+  heater, a freezer, a garage door pulse or a 0-10 V valve, and "turn
+  everything off / on" reaches every switch and light. Only the outputs of
+  "Outputs declared safe" (`safe_outputs`: `<ref>` or `<serial>:<ref>`, 500
+  entries at most, invalid ones said in the status) become `switch/binary`
+  (relay) or `light/binary` + `light/brightness` (dimmer), role `power` (and
+  `brightness`). The others are `unknown/binary` read only (role `state`),
+  `unknown/unknown` 0–100 for a dimmer (role `level`), and `button/push`
+  "Turn on" / "Turn off" (roles `turn-on`, `turn-off`), refused unless
+  `allow_output_buttons` (off by default), like `allow_plug_control` of
+  homee. Both sets are built, the other one hidden: a feature created before
+  the list changed is kept (never a lost feature), keeps its state, and a
+  command on a hidden switch or light is refused ("not declared safe").
+  Colour lights (multicolor) stay lights: LED drivers.
+- **CONNACK refusals** (review 1, I1): `reconnectOnConnackError: true`, so 1-3
+  (protocol, identifier, server unavailable) are tried again every 10 s like
+  an unreachable broker; 4, 5, 134, 135 end the client (no mqtt.js
+  reconnection after `end()`) and the persisted stop spaces the next tries.
+  Tested against a real mqtt.js and a local fake broker (`test/connack.test.js`).
+- **Gauges min/max** (I2): the `currentValue` min/max of the configuration
+  when finite and ordered, else a range per variant; every published
+  feature has a finite min <= max (tested).
+- **One setpoint at a time per thermostat** (I3), the waiters of a command
+  settled by that command only.
+- **The test button reads the saved configuration** (`getConfig`) before
+  its restart (I4); `rawConfig` also follows every soft update.
+- **Shutter state** from the position when the controller gives no `state`
+  (0 closed, otherwise open, as Home Assistant's `is_closed`) (M1). A stop is
+  always sent; on a shutter without `shutterStop` it is answered "sent,
+  without confirmation" (M2).
+- **2000 devices at most** in the Discovery (the core's
+  MAX_DISCOVERED_DEVICES), the rest left out with a warning and the status
+  (M4).
+- **Packet size** (M5): documented, not enforced at the MQTT level (MQTT 5
+  `maximumPacketSize` would exclude older brokers); the 2 MB / 64 KB bounds
+  apply after mqtt.js received the packet.
+- **Retained states ignored** for outputs and controllers (M6): a state kept
+  by the broker may be old; the configuration and the gateway state are kept.
+- **Scenes** may raise the heating or open things on the Qbus side: the
+  setpoint option does not apply to them (documented, M7).
 - **Shutters and thermostats never switches**: `shutter/state` and
   `shutter/position`; `temperature-sensor` and `thermostat/target-temperature`.
   The shutter state comes from the Qbus `state` (up/down/stop) only; a
@@ -65,9 +103,10 @@ container (no Docker on the development PC).
   caches of the status, the Discovery and the badges, and sends them again.
 - **Measurements throttled** by `sensor_interval` (10 s by default); on/off,
   positions, setpoints and rain never.
-- **Cumulative gauges not offered** (ENERGY, WATER, GAS, VOLUME): an energy
-  index needs the approved guard of gladys-p1-monitor and the units of the
-  Qbus gauges (Wh, m³) were never seen on a real installation.
+- **Gauges not offered**: the cumulative ENERGY, WATER and VOLUME (an index
+  needs the approved guard of gladys-p1-monitor; units never seen on a real
+  installation); the flows GAS, GASFLOW and WATERFLOW (m³/h, l/h: no unit of
+  the core), WATERLEVEL and LOUDNESS (no matching category and unit).
 
 ## Next
 
@@ -75,5 +114,4 @@ container (no Docker on the development PC).
   behind the same option, the regime that raises the heating bounded.
 - Slats of venetian blinds; effects of colour lights; steppers as a select.
 - Energy and water gauges as indexes, with the guard of gladys-p1-monitor.
-- A read-only mode per relay (pumps, heaters), if asked.
 - Test with a real gateway (Belgian user of the forum, topic 8672).

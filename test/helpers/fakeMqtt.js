@@ -62,11 +62,12 @@ export class FakeMqttClient extends EventEmitter {
     this.emit('close');
   }
 
-  deliver(topic, payload) {
+  deliver(topic, payload, packet = { retain: false }) {
     this.emit(
       'message',
       topic,
       Buffer.from(typeof payload === 'string' ? payload : JSON.stringify(payload)),
+      packet,
     );
   }
 

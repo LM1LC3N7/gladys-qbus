@@ -24,6 +24,10 @@ export function age(ms) {
 const FEATURE_NAMES = {
   [F.POWER]: both('On/off', 'Marche/arrêt'),
   [F.BRIGHTNESS]: both('Brightness', 'Luminosité'),
+  [F.STATE]: both('State', 'État'),
+  [F.LEVEL]: both('Level', 'Niveau'),
+  [F.TURN_ON]: both('Turn on', 'Allumer'),
+  [F.TURN_OFF]: both('Turn off', 'Éteindre'),
   [F.COLOR]: both('Colour', 'Couleur'),
   [F.SHUTTER]: both('Open / close', 'Ouvrir / fermer'),
   [F.POSITION]: both('Position', 'Position'),
@@ -101,10 +105,28 @@ export const T = {
           'The gateway answered, but lists no controller.',
           'La passerelle a répondu, mais ne liste aucun contrôleur.',
         ),
-  connected: (controllers, devices) =>
+  connected: (controllers, devices, { invalid = [], capped = 0 } = {}) =>
     both(
-      `Connected: ${controllers} controller(s), ${devices} device(s) offered in the Discovery tab.`,
-      `Connecté : ${controllers} contrôleur(s), ${devices} appareil(s) proposé(s) dans l’onglet Découverte.`,
+      [
+        `Connected: ${controllers} controller(s), ${devices} device(s) offered in the Discovery tab.`,
+        invalid.length > 0
+          ? `Ignored in "Outputs declared safe": ${invalid.join(', ')} (expected a ref such as 10, or serial:ref).`
+          : '',
+        capped > 0 ? `${capped} output(s) left out: Gladys takes 2000 devices at most.` : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
+      [
+        `Connecté : ${controllers} contrôleur(s), ${devices} appareil(s) proposé(s) dans l’onglet Découverte.`,
+        invalid.length > 0
+          ? `Ignoré dans « Sorties déclarées sûres » : ${invalid.join(', ')} (attendu : une référence comme 10, ou série:référence).`
+          : '',
+        capped > 0
+          ? `${capped} sortie(s) laissée(s) de côté : Gladys accepte 2000 appareils au plus.`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' '),
     ),
   unreachable: (reason) =>
     both(
@@ -165,6 +187,19 @@ export const ERRORS = {
     'This device is not (or no longer) in the configuration of the gateway: the command was not sent.',
     'Cet appareil n’est pas (ou plus) dans la configuration de la passerelle : la commande n’a pas été envoyée.',
   ),
+  unsafeOutput: both(
+    'This output is not declared safe in the configuration: nothing sent. Use its "Turn on" / "Turn off" buttons, or declare it safe.',
+    'Cette sortie n’est pas déclarée sûre dans la configuration : rien n’a été envoyé. Utilisez ses boutons « Allumer » / « Éteindre », ou déclarez-la sûre.',
+  ),
+  buttonsDisabled: both(
+    'The "Turn on" / "Turn off" buttons are off: allow them in the configuration of the integration.',
+    'Les boutons « Allumer » / « Éteindre » sont désactivés : autorisez-les dans la configuration de l’intégration.',
+  ),
+  ceilingBelowMin: (min, ceiling) =>
+    both(
+      `Refused: the minimum of the thermostat (${min} °C) is above the ceiling of the configuration (${ceiling} °C).`,
+      `Refusé : le minimum du thermostat (${min} °C) dépasse le plafond de la configuration (${ceiling} °C).`,
+    ),
   setpointsDisabled: both(
     'Setpoint commands are off: allow them in the configuration of the integration.',
     'Les commandes de consigne sont désactivées : autorisez-les dans la configuration de l’intégration.',

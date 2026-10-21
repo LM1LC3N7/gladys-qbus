@@ -5,8 +5,12 @@
 // What an output becomes, by its Qbus type (as Home Assistant's Qbus
 // integration maps them, ported from its light, switch, cover, climate,
 // scene and sensor platforms; Apache-2.0):
-//   onoff           switch: on/off (a relay)
-//   analog          light: on/off and brightness (a dimmer)
+//   onoff           a relay: a switch ONLY when declared safe in the
+//                   configuration; otherwise a read-only state and
+//                   "Turn on" / "Turn off" buttons, refused unless allowed
+//   analog          a dimmer (or a 0-10 V output): a light (on/off and
+//                   brightness) ONLY when declared safe; otherwise a
+//                   read-only state and level, and the same buttons
 //   multicolor      light: on/off, brightness and colour
 //   shutter         shutter: open/close/stop, and its position when the
 //                   controller reports one (never a switch)
@@ -21,8 +25,10 @@
 //   weatherstation  temperature, light, wind and rain
 // Not offered in v1: steppers, the regimes (presets) of thermostats,
 // ventilations and humidity outputs, the slats of venetian blinds, the
-// effects of colour lights, and the cumulative gauges (energy, water, gas,
-// volume: an index needs the guard of the energy indexes).
+// effects of colour lights, the cumulative gauges (ENERGY, WATER, VOLUME:
+// an index needs the guard of the energy indexes), the flow gauges (GAS,
+// GASFLOW, WATERFLOW: m³/h or l/h, no unit of the core), WATERLEVEL and
+// LOUDNESS (no unit of the core for them either).
 //
 // External ids (frozen: never change one):
 //   device   ext:<selector>:output:<controller serial>-<ref>, <ref> being the
@@ -36,6 +42,7 @@ import {
   DEVICE_FEATURE_TYPES as T,
 } from '@gladysassistant/integration-sdk';
 import { COVER_STATE, FEATURES as F, LIMITS, PRESSED, SETPOINT } from './constants.js';
+import { isSafeOutput } from './config.js';
 import { featureName } from './i18n.js';
 
 /** A number sent by Gladys: a finite number, or a plain decimal text ('' and null are not 0). */
@@ -131,44 +138,67 @@ const GAUGES = {
     category: C.TEMPERATURE_SENSOR,
     type: T.SENSOR.DECIMAL,
     units: { '°c': 'celsius', c: 'celsius' },
+    range: [-50, 100],
   },
-  HUMIDITY: { category: C.HUMIDITY_SENSOR, type: T.SENSOR.DECIMAL, units: { '%': 'percent' } },
-  AIRQUALITY: { category: C.CO2_SENSOR, type: T.SENSOR.DECIMAL, units: { ppm: 'ppm' } },
-  LIGHT: { category: C.LIGHT_SENSOR, type: T.SENSOR.DECIMAL, units: { lx: 'lux', lux: 'lux' } },
+  HUMIDITY: {
+    category: C.HUMIDITY_SENSOR,
+    type: T.SENSOR.DECIMAL,
+    units: { '%': 'percent' },
+    range: [0, 100],
+  },
+  AIRQUALITY: {
+    category: C.CO2_SENSOR,
+    type: T.SENSOR.DECIMAL,
+    units: { ppm: 'ppm' },
+    range: [0, 10000],
+  },
+  LIGHT: {
+    category: C.LIGHT_SENSOR,
+    type: T.SENSOR.DECIMAL,
+    units: { lx: 'lux', lux: 'lux' },
+    range: [0, 200000],
+  },
   AIRPRESSURE: {
     category: C.PRESSURE_SENSOR,
     type: T.SENSOR.DECIMAL,
     units: { mbar: 'milli-bar', hpa: 'hPa' },
+    range: [0, 2000],
   },
   WATERPRESSURE: {
     category: C.PRESSURE_SENSOR,
     type: T.SENSOR.DECIMAL,
     units: { mbar: 'milli-bar', bar: 'bar', kpa: 'kPa' },
+    range: [0, 100000],
   },
   PRESSURE: {
     category: C.PRESSURE_SENSOR,
     type: T.SENSOR.DECIMAL,
     units: { kpa: 'kPa', bar: 'bar', mbar: 'milli-bar', hpa: 'hPa', pa: 'pascal', psi: 'psi' },
+    range: [0, 1000000],
   },
   POWER: {
     category: C.ENERGY_SENSOR,
     type: T.ENERGY_SENSOR.POWER,
     units: { kw: 'kilowatt', w: 'watt' },
+    range: [-1000000, 1000000],
   },
   CURRENT: {
     category: C.ENERGY_SENSOR,
     type: T.ENERGY_SENSOR.CURRENT,
     units: { a: 'ampere', ma: 'milliampere' },
+    range: [-100000, 100000],
   },
   VOLTAGE: {
     category: C.ENERGY_SENSOR,
     type: T.ENERGY_SENSOR.VOLTAGE,
     units: { v: 'volt', mv: 'millivolt' },
+    range: [-100000, 100000],
   },
   WIND: {
     category: C.SPEED_SENSOR,
     type: T.SPEED_SENSOR.DECIMAL,
     units: { 'km/h': 'kilometer-per-hour', 'm/s': 'meter-per-second' },
+    range: [0, 500],
   },
 };
 
@@ -180,6 +210,14 @@ export function gaugeUnit(spec, qbusUnit) {
   }
   const found = units.find(([key]) => key === qbusUnit.trim().toLowerCase());
   return found ? found[1] : undefined;
+}
+
+/** The min and max of a gauge: those the controller declares when sound, else the variant's. */
+export function gaugeRange(spec, { min, max } = {}) {
+  const ok = (n) => Number.isFinite(n) && Math.abs(n) <= 1e9;
+  return ok(min) && ok(max) && min <= max
+    ? { min, max }
+    : { min: spec.range[0], max: spec.range[1] };
 }
 
 // --- Readers: a state's properties -> the Gladys value of a feature ----------
@@ -201,6 +239,11 @@ function shutterState(props) {
   if (state === 'stop') {
     return COVER_STATE.STOP;
   }
+  // No state (a shutter with a position): closed at 0, open otherwise (Home Assistant's is_closed).
+  const position = props.get('shutterPosition');
+  if (typeof position === 'number') {
+    return position <= 0 ? COVER_STATE.CLOSE : COVER_STATE.OPEN;
+  }
   return undefined;
 }
 
@@ -210,55 +253,116 @@ function feature(role, spec) {
   return { role, measurement: false, readOnly: true, ...spec };
 }
 
+const pushButton = (role, gate, body) =>
+  feature(role, {
+    category: C.BUTTON,
+    type: T.BUTTON.PUSH,
+    min: 0,
+    max: 1,
+    readOnly: false,
+    history: false,
+    gate,
+    write: (value) => {
+      if (strictNumber(value) !== PRESSED) {
+        refuse('badValue');
+      }
+      return body;
+    },
+  });
+
+/**
+ * A relay (onoff) or a dimmer (analog). The load behind it is unknown (a
+ * lamp, but also a circulator, a boiler, a heater, a freezer, a garage door
+ * pulse...), and a "turn everything off / on" of a voice assistant or a
+ * scene reaches every switch and every light. So only an output declared
+ * safe in the configuration is a switch (relay) or a light (dimmer); any
+ * other is a read-only state, with "Turn on" / "Turn off" push buttons that
+ * work only when the configuration allows them.
+ *
+ * Both sets are built: the other one is `hidden` (not published, still read,
+ * so a feature the user created before the list changed keeps its state; a
+ * command on a hidden switch or light is refused).
+ */
+function switchedOutput(output, { safe }) {
+  const dimmer = output.type === 'analog';
+  const isOn = dimmer
+    ? (p) => (typeof p.get('value') === 'number' ? (p.get('value') > 0 ? 1 : 0) : undefined)
+    : (p) => (typeof p.get('value') === 'boolean' ? (p.get('value') ? 1 : 0) : undefined);
+  const level = (p) =>
+    typeof p.get('value') === 'number' ? clamp(Math.round(p.get('value')), 0, 100) : undefined;
+  const low = clamp(Math.ceil(output.limits.value.min ?? 1), 1, 100);
+  const controlled = [
+    feature(F.POWER, {
+      category: dimmer ? C.LIGHT : C.SWITCH,
+      type: dimmer ? T.LIGHT.BINARY : T.SWITCH.BINARY,
+      min: 0,
+      max: 1,
+      readOnly: false,
+      read: isOn,
+      write: dimmer
+        ? (value) => ({ type: 'action', action: onOff(value) ? 'on' : 'off' })
+        : (value) => ({ properties: { value: onOff(value) } }),
+    }),
+  ];
+  if (dimmer) {
+    controlled.push(
+      feature(F.BRIGHTNESS, {
+        category: C.LIGHT,
+        type: T.LIGHT.BRIGHTNESS,
+        min: 0,
+        max: 100,
+        unit: 'percent',
+        readOnly: false,
+        read: level,
+        write: (value) => {
+          const v = percent(value);
+          return v === 0
+            ? { type: 'action', action: 'off' }
+            : { properties: { value: Math.max(low, v) } };
+        },
+      }),
+    );
+  }
+  const guarded = [
+    feature(F.STATE, { category: C.UNKNOWN, type: T.SENSOR.BINARY, min: 0, max: 1, read: isOn }),
+  ];
+  if (dimmer) {
+    guarded.push(
+      feature(F.LEVEL, {
+        category: C.UNKNOWN,
+        type: T.UNKNOWN.UNKNOWN,
+        min: 0,
+        max: 100,
+        read: level,
+      }),
+    );
+  }
+  guarded.push(
+    pushButton(
+      F.TURN_ON,
+      'outputButtons',
+      dimmer ? { type: 'action', action: 'on' } : { properties: { value: true } },
+    ),
+    pushButton(
+      F.TURN_OFF,
+      'outputButtons',
+      dimmer ? { type: 'action', action: 'off' } : { properties: { value: false } },
+    ),
+  );
+  const hide = (list, refusal) =>
+    list.map((f) => ({ ...f, hidden: true, refusal: f.refusal ?? refusal }));
+  return safe
+    ? [...controlled, ...hide(guarded)]
+    : [...guarded, ...hide(controlled, 'unsafeOutput')];
+}
+
 /** The features of an output, with how to read and write each; [] when not offered. */
-export function outputFeatures(output) {
-  const { has, limits } = output;
+export function outputFeatures(output, { safe = false } = {}) {
+  const { has } = output;
   switch (output.type) {
     case 'onoff':
-      return [
-        feature(F.POWER, {
-          category: C.SWITCH,
-          type: T.SWITCH.BINARY,
-          min: 0,
-          max: 1,
-          readOnly: false,
-          read: (p) => (typeof p.get('value') === 'boolean' ? (p.get('value') ? 1 : 0) : undefined),
-          write: (value) => ({ properties: { value: onOff(value) } }),
-        }),
-      ];
-    case 'analog': {
-      const low = clamp(Math.ceil(limits.value.min ?? 1), 1, 100);
-      return [
-        feature(F.POWER, {
-          category: C.LIGHT,
-          type: T.LIGHT.BINARY,
-          min: 0,
-          max: 1,
-          readOnly: false,
-          read: (p) =>
-            typeof p.get('value') === 'number' ? (p.get('value') > 0 ? 1 : 0) : undefined,
-          write: (value) => ({ type: 'action', action: onOff(value) ? 'on' : 'off' }),
-        }),
-        feature(F.BRIGHTNESS, {
-          category: C.LIGHT,
-          type: T.LIGHT.BRIGHTNESS,
-          min: 0,
-          max: 100,
-          unit: 'percent',
-          readOnly: false,
-          read: (p) =>
-            typeof p.get('value') === 'number'
-              ? clamp(Math.round(p.get('value')), 0, 100)
-              : undefined,
-          write: (value) => {
-            const v = percent(value);
-            return v === 0
-              ? { type: 'action', action: 'off' }
-              : { properties: { value: Math.max(low, v) } };
-          },
-        }),
-      ];
-    }
+    case 'analog':
+      return switchedOutput(output, { safe });
     case 'multicolor':
       return [
         feature(F.POWER, {
@@ -318,7 +422,9 @@ export function outputFeatures(output) {
           write: (value) => {
             const v = strictNumber(value);
             if (v === COVER_STATE.STOP) {
-              return { properties: { state: 'stop' } };
+              // Always sent (a stop is never held), but the controller declares no stop:
+              // answered "sent, without confirmation".
+              return { properties: { state: 'stop' }, unconfirmed: !output.actions.stop };
             }
             if (v === COVER_STATE.OPEN) {
               return { properties: positioned ? { shutterPosition: 100 } : { state: 'up' } };
@@ -405,6 +511,7 @@ export function outputFeatures(output) {
           category: spec.category,
           type: spec.type,
           unit,
+          ...gaugeRange(spec, output.limits.currentValue),
           measurement: true,
           read: number('currentValue'),
         }),
@@ -486,24 +593,37 @@ export function outputFeatures(output) {
 }
 
 /**
- * @param {{ externalIds: Function, controllers: object[], language: string }} input
- * @returns {{ devices, features, outputs, deviceOf, throttled }}
- *   features: featureId -> { output, spec, deviceId }
+ * @param {{ externalIds: Function, controllers: object[], language: string, safeOutputs: Set }} input
+ * @returns {{ devices, features, outputs, deviceOf, throttled, capped }}
+ *   features: featureId -> { output, spec, deviceId } (hidden features included)
  *   outputs: "<controller id>/<output id>" -> { output, deviceId, features: [featureId] }
  *   deviceOf: deviceId -> output
+ *   capped: the outputs left out over LIMITS.devices (the core refuses a larger Discovery)
  */
-export function buildModel({ externalIds, controllers = [], language = 'fr' }) {
+export function buildModel({
+  externalIds,
+  controllers = [],
+  language = 'fr',
+  safeOutputs = new Set(),
+}) {
   const model = {
     devices: [],
     features: new Map(),
     outputs: new Map(),
     deviceOf: new Map(),
     throttled: new Set(),
+    capped: 0,
   };
   for (const controller of controllers) {
     for (const output of controller.outputs) {
-      const specs = outputFeatures(output);
+      const specs = outputFeatures(output, {
+        safe: isSafeOutput(safeOutputs, controller.serial, output.ref),
+      });
       if (specs.length === 0) {
+        continue;
+      }
+      if (model.devices.length >= LIMITS.devices) {
+        model.capped += 1;
         continue;
       }
       const ids = externalIds('output', `${controller.serial}-${output.ref}`);
@@ -511,26 +631,30 @@ export function buildModel({ externalIds, controllers = [], language = 'fr' }) {
         continue;
       }
       const featureIds = [];
-      const features = specs.map((spec) => {
+      const features = [];
+      for (const spec of specs) {
         const featureId = ids.feature(spec.role);
         featureIds.push(featureId);
         model.features.set(featureId, { output, spec, deviceId: ids.device });
         if (spec.measurement) {
           model.throttled.add(featureId);
         }
-        return {
+        if (spec.hidden) {
+          continue;
+        }
+        features.push({
           name: featureName(spec.role, language),
           external_id: featureId,
           category: spec.category,
           type: spec.type,
           ...(spec.unit ? { unit: spec.unit } : {}),
-          ...(spec.min !== undefined ? { min: spec.min } : {}),
-          ...(spec.max !== undefined ? { max: spec.max } : {}),
+          min: spec.min,
+          max: spec.max,
           read_only: spec.readOnly,
           has_feedback: spec.read !== undefined,
           keep_history: spec.history !== false,
-        };
-      });
+        });
+      }
       model.devices.push({
         name: output.name.slice(0, LIMITS.nameLength),
         external_id: ids.device,

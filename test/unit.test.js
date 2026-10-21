@@ -2,7 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ceilingOf, normalizeConfig, parseBrokerUrl } from '../src/config.js';
+import { ceilingOf, normalizeConfig, parseBrokerUrl, parseSafeOutputs } from '../src/config.js';
 import { LIMITS, TIMINGS } from '../src/constants.js';
 import { buildModel, gaugeUnit, hsToRgb, outputFeatures, rgbToHs } from '../src/model.js';
 import { errorReason, isRefusal } from '../src/mqtt.js';
@@ -222,4 +222,60 @@ test('MQTT errors never carry a password', () => {
   assert.equal(isRefusal({ code: 'ECONNREFUSED' }), false);
   assert.equal(errorReason({ code: 'ECONNREFUSED' }), 'ECONNREFUSED');
   assert.doesNotMatch(errorReason(new Error('connect mqtt://user:secret@host failed')), /secret/);
+});
+
+test('I2: every published feature has a finite min and max, min <= max', () => {
+  const { controllers } = parseConfig(JSON.stringify(config()));
+  for (const safeOutputs of [new Set(), new Set(['10', '28'])]) {
+    const model = buildModel({ externalIds, controllers, safeOutputs });
+    for (const device of model.devices) {
+      for (const f of device.features) {
+        assert.ok(
+          Number.isFinite(f.min) && Number.isFinite(f.max) && f.min <= f.max,
+          f.external_id,
+        );
+      }
+    }
+  }
+  const gauge = {
+    ...OUTPUTS.temperature,
+    properties: { currentValue: { unit: '°C', min: -30, max: 80 } },
+  };
+  const [output] = parseConfig(JSON.stringify(config([controller([gauge])]))).controllers[0]
+    .outputs;
+  assert.deepEqual([outputFeatures(output)[0].min, outputFeatures(output)[0].max], [-30, 80]);
+  const bad = {
+    ...OUTPUTS.temperature,
+    properties: { currentValue: { unit: '°C', min: 90, max: 10 } },
+  };
+  const [o2] = parseConfig(JSON.stringify(config([controller([bad])]))).controllers[0].outputs;
+  assert.deepEqual([outputFeatures(o2)[0].min, outputFeatures(o2)[0].max], [-50, 100]);
+});
+
+test('M4: never more than 2000 devices in the Discovery', () => {
+  const ctds = Array.from({ length: 3 }, (_, k) =>
+    controller(
+      Array.from({ length: 1000 }, (_, i) => ({
+        id: `U${k}x${i}`,
+        refId: `00000${k}/${i}`,
+        type: 'scene',
+        name: `S${i}`,
+      })),
+      { id: `C${k}`, serialNr: `00000${k}` },
+    ),
+  );
+  const model = buildModel({
+    externalIds,
+    controllers: parseConfig(JSON.stringify(config(ctds))).controllers,
+  });
+  assert.equal(model.devices.length, LIMITS.devices);
+  assert.equal(model.capped, 1000);
+});
+
+test('B1: the safe list', () => {
+  const { safe, invalid } = parseSafeOutputs('10, 28\n000123:105-3;lamp 1/2');
+  assert.deepEqual([...safe], ['10', '28', '000123:105-3']);
+  assert.deepEqual(invalid, ['lamp', '1/2']);
+  assert.equal(parseSafeOutputs(undefined).safe.size, 0);
+  assert.ok(parseSafeOutputs(Array.from({ length: 600 }, (_, i) => i).join(',')).safe.size <= 500);
 });

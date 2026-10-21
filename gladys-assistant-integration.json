@@ -99,6 +99,41 @@
       "required": false
     },
     {
+      "key": "outputs_section",
+      "type": "section",
+      "label": { "en": "Relays and dimmers", "fr": "Relais et variateurs" },
+      "description": {
+        "en": "A Qbus relay or dimmer may feed anything (a lamp, but also a circulator, the boiler, a heater, a freezer, a garage door), and a \"turn everything off / on\" of a voice assistant or a scene reaches every switch and every light. So a relay or a dimmer is only shown in Gladys, read only, with \"Turn on\" / \"Turn off\" buttons, until you declare it safe below: it then becomes a switch (relay) or a light (dimmer).",
+        "fr": "Un relais ou un variateur Qbus peut alimenter n'importe quoi (une lampe, mais aussi un circulateur, la chaudière, un radiateur, un congélateur, une porte de garage), et un « éteins tout / allume tout » d'un assistant vocal ou d'une scène atteint chaque interrupteur et chaque lumière. Un relais ou un variateur est donc seulement affiché dans Gladys, en lecture seule, avec des boutons « Allumer » / « Éteindre », jusqu'à ce que vous le déclariez sûr ci-dessous : il devient alors un interrupteur (relais) ou une lumière (variateur)."
+      }
+    },
+    {
+      "key": "safe_outputs",
+      "type": "string",
+      "label": { "en": "Outputs declared safe", "fr": "Sorties déclarées sûres" },
+      "description": {
+        "en": "The refs of the relays and dimmers (parameter QBUS_OUTPUT in the Discovery tab), separated by commas; serial:ref for one controller when there are several. Only loads that may be switched off or on at any time (a lamp, a socket for a lamp).",
+        "fr": "Les références des relais et variateurs (paramètre QBUS_OUTPUT dans l'onglet Découverte), séparées par des virgules ; série:référence pour un seul contrôleur quand il y en a plusieurs. Seulement des charges qu'on peut couper ou allumer à tout moment (une lampe, une prise de lampe)."
+      },
+      "placeholder": { "en": "10, 28, 000123:45", "fr": "10, 28, 000123:45" },
+      "required": false,
+      "default": ""
+    },
+    {
+      "key": "allow_output_buttons",
+      "type": "boolean",
+      "label": {
+        "en": "Allow the \"Turn on\" / \"Turn off\" buttons",
+        "fr": "Autoriser les boutons « Allumer » / « Éteindre »"
+      },
+      "description": {
+        "en": "Off by default: the buttons of the relays and dimmers not declared safe do nothing. On: a press (dashboard, scene) switches the output.",
+        "fr": "Désactivé par défaut : les boutons des relais et variateurs non déclarés sûrs ne font rien. Activé : un appui (tableau de bord, scène) commande la sortie."
+      },
+      "required": false,
+      "default": false
+    },
+    {
       "key": "heating",
       "type": "section",
       "label": { "en": "Heating setpoints", "fr": "Consignes de chauffage" },

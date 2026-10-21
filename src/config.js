@@ -14,6 +14,8 @@ export const DEFAULT_CONFIG = {
   password: '',
   verify_certificate: true,
   controller_serial: '',
+  safe_outputs: '',
+  allow_output_buttons: false,
   allow_setpoints: false,
   max_setpoint: SETPOINT.ceilingDefault,
   sensor_interval: SENSOR_INTERVAL.default,
@@ -91,6 +93,39 @@ export function ceilingOf(value) {
   return Math.min(SETPOINT.max, Math.max(SETPOINT.ceilingMin, Math.floor(number)));
 }
 
+/** At most this many entries in "Outputs declared safe". */
+export const SAFE_OUTPUTS_MAX = 500;
+
+/**
+ * The outputs declared safe to switch (relays and dimmers): `<ref>` (the
+ * QBUS_OUTPUT parameter of the Discovery tab, on every controller) or
+ * `<serial>:<ref>` (one controller), separated by commas, spaces or new
+ * lines. Anything else is ignored and listed in `invalid`.
+ */
+export function parseSafeOutputs(raw) {
+  const safe = new Set();
+  const invalid = [];
+  const text = typeof raw === 'string' ? raw.slice(0, 20_000) : '';
+  for (const entry of text.split(/[\s,;]+/)) {
+    if (entry === '') {
+      continue;
+    }
+    const match = /^(?:([A-Za-z0-9_-]{1,32}):)?(\d{1,6}(?:-\d{1,6})?)$/.exec(entry);
+    if (!match || safe.size >= SAFE_OUTPUTS_MAX) {
+      if (invalid.length < 10) {
+        invalid.push(entry.slice(0, 40));
+      }
+      continue;
+    }
+    safe.add(match[1] === undefined ? match[2] : `${match[1]}:${match[2]}`);
+  }
+  return { safe, invalid };
+}
+
+/** Whether an output (its controller serial and ref) is declared safe. */
+export const isSafeOutput = (safeOutputs, serial, ref) =>
+  safeOutputs.has(ref) || safeOutputs.has(`${serial}:${ref}`);
+
 export function normalizeConfig(raw = {}) {
   const c = { ...DEFAULT_CONFIG };
   for (const [key, value] of Object.entries(raw ?? {})) {
@@ -102,6 +137,7 @@ export function normalizeConfig(raw = {}) {
   const serial = parseSerial(c.controller_serial);
   const interval = numberOf(c.sensor_interval);
   const password = typeof c.password === 'string' ? c.password : '';
+  const outputs = parseSafeOutputs(c.safe_outputs);
   let problem = broker.error ? `broker:${broker.error}` : undefined;
   if (!problem && serial.error) {
     problem = 'serial';
@@ -117,6 +153,9 @@ export function normalizeConfig(raw = {}) {
     // TLS certificates are checked unless the user turns it off.
     verifyCertificate: !strictFalse(c.verify_certificate),
     serial: serial.serial,
+    safeOutputs: outputs.safe,
+    invalidOutputs: outputs.invalid,
+    allowOutputButtons: strictTrue(c.allow_output_buttons),
     allowSetpoints: strictTrue(c.allow_setpoints),
     ceiling: ceilingOf(c.max_setpoint),
     sensorInterval:

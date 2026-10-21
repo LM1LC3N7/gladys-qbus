@@ -28,6 +28,8 @@ import {
 import { fakeConnector, settle } from './helpers/fakeMqtt.js';
 
 const START = 1_760_000_000_000;
+/** The relay, the dimmer and the hostile relay of the fixture are declared safe. */
+const BASE = { broker_url: '192.168.1.50', safe_outputs: '10, 28 13' };
 const TH = ID('120');
 
 /** A gateway answering getState: the controller connected, the thermostat at `setTemp`. */
@@ -38,6 +40,7 @@ function gateway(options = {}) {
     answerStates: true,
     confirm: true,
     onGetState: undefined,
+    others: {},
     ...options,
   };
   g.responder = (t, payload, client) => {
@@ -56,7 +59,15 @@ function gateway(options = {}) {
             state(id, { setTemp: g.setTemp, currTemp: 19.5, currRegime: 'MANUEEL' }),
           );
         }
+        if (Object.hasOwn(g.others, id)) {
+          client.deliver(topic.output(id), state(id, { setTemp: g.others[id] }));
+        }
       }
+    }
+    const other = Object.keys(g.others).find((id) => t === topic.command(id));
+    if (other && g.confirm) {
+      g.others[other] = JSON.parse(payload).properties.setTemp;
+      client.deliver(topic.output(other), state(other, { setTemp: g.others[other] }, 'event'));
     }
     if (t === topic.command(OUTPUTS.thermostat.id) && g.confirm) {
       const body = JSON.parse(payload);
@@ -67,10 +78,7 @@ function gateway(options = {}) {
   return g;
 }
 
-async function setup(
-  t,
-  { cfg = { broker_url: '192.168.1.50' }, devices = [], memory = null, gw = gateway() } = {},
-) {
+async function setup(t, { cfg = BASE, devices = [], memory = null, gw = gateway() } = {}) {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: START });
   const gladys = createFakeGladys({ config: cfg, devices });
   const broker = fakeConnector(gw.responder);
@@ -460,12 +468,12 @@ test('a reconnection to Gladys keeps the client and sends the status and the Dis
   const ctx = await setup(t);
   await online(ctx);
   const statuses = ctx.gladys.fake.connectionStatuses.length;
-  await ctx.app.gladysConnected({ broker_url: '192.168.1.50' });
+  await ctx.app.gladysConnected(BASE);
   assert.equal(ctx.broker.clients.length, 1);
   assert.equal(ctx.broker.clients[0].ended, false);
   assert.ok(ctx.gladys.fake.connectionStatuses.length > statuses);
   const posts = ctx.gladys.fake.bodies('POST', '/discovered_device').length;
-  await ctx.app.gladysConnected({ broker_url: '192.168.1.50' });
+  await ctx.app.gladysConnected(BASE);
   assert.equal(
     ctx.gladys.fake.bodies('POST', '/discovered_device').length,
     posts + 1,
@@ -593,4 +601,177 @@ test('the button tests the connection, at most every 10 s', async (t) => {
   assert.equal(probe.ended, true);
   const again = await ctx.gladys.fake.action(ACTIONS.TEST, {});
   assert.match(JSON.stringify(again.data), /Already tested/);
+});
+
+// --- Round 1 of the review ------------------------------------------------------
+
+const UNSAFE = { broker_url: '192.168.1.50' };
+const hiddenFeature = (device, role) => ({
+  external_id: `${device.external_id}:${role}`,
+  category: 'switch',
+  type: 'binary',
+});
+
+test('B1: a relay or a dimmer not declared safe is never a switch nor a light', async (t) => {
+  const ctx = await setup(t, { cfg: UNSAFE });
+  const client = await online(ctx);
+  const relay = discovered(ctx.gladys, ID('10'));
+  const dimmer = discovered(ctx.gladys, ID('28'));
+  assert.deepEqual(
+    relay.features.map((f) => [f.external_id.split(':').at(-1), f.category, f.type, f.read_only]),
+    [
+      ['state', 'unknown', 'binary', true],
+      ['turn-on', 'button', 'push', false],
+      ['turn-off', 'button', 'push', false],
+    ],
+  );
+  assert.ok(dimmer.features.every((f) => !['light', 'switch'].includes(f.category)));
+  for (const device of ctx.gladys.fake.discoveredDevices) {
+    if (!['32101'].includes(device.params.find((p) => p.name === 'QBUS_OUTPUT').value)) {
+      assert.ok(
+        device.features.every((f) => f.category !== 'switch' && f.category !== 'light'),
+        device.name,
+      );
+    }
+  }
+  // "Turn everything off": the switch does not exist; a command on its id is refused, nothing sent.
+  const ack = await ctx.gladys.fake.setValue(relay, hiddenFeature(relay, 'power'), 0);
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /pas déclarée sûre/);
+  // The buttons do nothing unless allowed.
+  const press = await command(ctx, relay, 'turn-on', 1);
+  assert.match(press.error, /boutons « Allumer » \/ « Éteindre » sont désactivés/);
+  assert.equal(client.commands().length, 0);
+});
+
+test('B1: the buttons switch the output once allowed', async (t) => {
+  const ctx = await setup(t, { cfg: { ...UNSAFE, allow_output_buttons: true } });
+  const client = await online(ctx);
+  assert.equal((await command(ctx, discovered(ctx.gladys, ID('10')), 'turn-on', 1)).success, true);
+  assert.equal((await command(ctx, discovered(ctx.gladys, ID('28')), 'turn-off', 1)).success, true);
+  assert.equal(
+    (await command(ctx, discovered(ctx.gladys, ID('10')), 'turn-off', 0)).success,
+    false,
+  );
+  assert.deepEqual(
+    client.commands().map((c) => c.body),
+    [
+      { id: 'UL10', type: 'state', properties: { value: true } },
+      { id: 'UL15', type: 'action', action: 'off' },
+    ],
+  );
+});
+
+test('B1: a switch created before the output left the safe list is kept, read, refused', async (t) => {
+  const ctx = await setup(t);
+  const client = await online(ctx);
+  const relay = await create(ctx, '10');
+  await ctx.gladys.fake.configUpdated(UNSAFE);
+  await ctx.tick(0);
+  const again = discovered(ctx.gladys, relay.external_id);
+  const roles = again.features.map((f) => f.external_id.split(':').at(-1));
+  assert.deepEqual(roles, ['state', 'turn-on', 'turn-off', 'power']);
+  client.deliver(topic.output('UL10'), state('UL10', { value: true }));
+  await ctx.tick(TIMINGS.flushInterval);
+  assert.equal(ctx.gladys.fake.lastState(featureOf(relay, 'power').external_id), 1);
+  const ack = await command(ctx, relay, 'power', 0);
+  assert.match(ack.error, /pas déclarée sûre/);
+  assert.equal(client.commands().length, 0);
+});
+
+test('B1: invalid entries of the safe list are said in the status', async (t) => {
+  const ctx = await setup(t, { cfg: { ...UNSAFE, safe_outputs: '10, lamp, 000123:28' } });
+  await online(ctx);
+  assert.match(
+    ctx.gladys.fake.connectionStatus.message.en,
+    /Ignored in "Outputs declared safe": lamp/,
+  );
+  assert.equal(featureOf(discovered(ctx.gladys, ID('28')), 'brightness').category, 'light');
+});
+
+test('I3: two thermostats set at once by a scene both go through', async (t) => {
+  const second = { ...OUTPUTS.thermostat, id: 'UL21', refId: `${SERIAL}/121`, name: 'Bedroom TH' };
+  const gw = gateway({ others: { UL21: 20 } });
+  const ctx = await setup(t, { cfg: allowed, gw });
+  await online(ctx, config([controller([OUTPUTS.thermostat, second])]));
+  const a = discovered(ctx.gladys, TH);
+  const b = discovered(ctx.gladys, ID('121'));
+  const [ackA, ackB] = await Promise.all([
+    ctx.gladys.fake.setValue(a, featureOf(a, 'target-temperature'), 17),
+    ctx.gladys.fake.setValue(b, featureOf(b, 'target-temperature'), 17),
+  ]);
+  assert.equal(ackA.success, true, ackA.error);
+  assert.equal(ackB.success, true, ackB.error);
+  assert.equal(gw.setTemp, 17);
+  assert.equal(gw.others.UL21, 17);
+});
+
+test('I4: the test button restarts on the configuration saved now', async (t) => {
+  const ctx = await setup(t, { cfg: allowed });
+  const client = await online(ctx);
+  await ctx.gladys.fake.configUpdated({ ...allowed, allow_setpoints: false });
+  assert.equal(ctx.app.config.allowSetpoints, false);
+  client.refuse(5);
+  await settle();
+  ctx.broker.responder = (t2, payload, c) => {
+    if (t2 === TOPICS.getConfig) {
+      c.deliver(topic.config, config());
+    }
+  };
+  const pending = ctx.gladys.fake.action(ACTIONS.TEST, {});
+  await settle();
+  ctx.broker.clients.at(-1).open();
+  await settle();
+  assert.equal((await pending).success, true);
+  await settle();
+  assert.equal(ctx.app.config.allowSetpoints, false, 'the option stays off');
+  assert.equal(ctx.store.data.auth.failures, 0);
+});
+
+test('M1: a shutter with a position and no state reads closed at 0', async (t) => {
+  const ctx = await setup(t);
+  const client = await online(ctx);
+  const shutter = await create(ctx, '109');
+  client.deliver(topic.output('UL31'), state('UL31', { shutterPosition: 0 }));
+  await ctx.tick(TIMINGS.flushInterval);
+  assert.equal(ctx.gladys.fake.lastState(featureOf(shutter, 'shutter').external_id), -1);
+  client.deliver(topic.output('UL31'), state('UL31', { shutterPosition: 40 }));
+  await ctx.tick(TIMINGS.flushInterval);
+  assert.equal(ctx.gladys.fake.lastState(featureOf(shutter, 'shutter').external_id), 1);
+});
+
+test('M2: stop is always sent, "without confirmation" when the shutter declares none', async (t) => {
+  const ctx = await setup(t);
+  const plain = { ...OUTPUTS.blind, actions: { shutterUp: null, shutterDown: null } };
+  const client = await online(ctx, config([controller([plain])]));
+  const ack = await command(ctx, discovered(ctx.gladys, ID('108')), 'shutter', 0);
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /envoyée, sans confirmation/);
+  assert.deepEqual(client.commands()[0].body.properties, { state: 'stop' });
+});
+
+test('M3: a thermostat whose minimum is above the ceiling says so', async (t) => {
+  const ctx = await setup(t, { cfg: allowed });
+  const warm = {
+    ...OUTPUTS.thermostat,
+    properties: { ...OUTPUTS.thermostat.properties, setTemp: { type: 'number', min: 26, max: 35 } },
+  };
+  await online(ctx, config([controller([warm])]));
+  const ack = await command(ctx, discovered(ctx.gladys, TH), 'target-temperature', 26);
+  assert.match(
+    ack.error,
+    /minimum of the thermostat \(26 °C\) is above the ceiling of the configuration \(24 °C\)/,
+  );
+});
+
+test('M6: a state kept by the broker (retain) is not a current state', async (t) => {
+  const ctx = await setup(t);
+  const client = await online(ctx);
+  const relay = await create(ctx, '10');
+  client.deliver(topic.output('UL10'), state('UL10', { value: true }), { retain: true });
+  await ctx.tick(TIMINGS.flushInterval);
+  assert.equal(ctx.gladys.fake.lastState(featureOf(relay, 'power').external_id), undefined);
+  client.deliver(topic.config, config(), { retain: true });
+  await ctx.tick(TIMINGS.rebuildDebounce);
+  assert.ok(discovered(ctx.gladys, relay.external_id), 'a retained configuration is kept');
 });

@@ -4,8 +4,9 @@
 **Qbus** home automation controllers (CTD 3.x), over the **local MQTT broker
 of the user**, where the Qbus MQTT gateway (qbusMqttGw) publishes: relays,
 dimmers, colour lights, shutters and blinds, thermostats, scenes and sensors
-(gauges, humidity, CO2, weather station). Shutters and thermostats are never
-switches; heating setpoints are refused unless allowed, and bounded (5 °C to
+(gauges, humidity, CO2, weather station). Relays and dimmers are switches or
+lights only when declared safe, read-only otherwise; shutters and thermostats
+are never switches; heating setpoints are refused unless allowed, and bounded (5 °C to
 a ceiling of 24 °C by default, 30 °C at most). **Never tested with a real
 installation. Unofficial, not affiliated with Qbus.**
 
