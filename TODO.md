@@ -37,7 +37,10 @@ container (no Docker on the development PC).
   A Qbus onoff or analog output may drive a circulator, the boiler demand, a
   heater, a freezer, a garage door pulse or a 0-10 V valve, and "turn
   everything off / on" reaches every switch and light. Only the outputs of
-  "Outputs declared safe" (`safe_outputs`: `<ref>` or `<serial>:<ref>`, 500
+  "Outputs declared safe" (`safe_outputs`: `<ref>` or `<serial>:<ref>`, a
+  plain `<ref>` counting only when the gateway has a single controller after
+  the `controller_serial` filter, otherwise applied nowhere and named in the
+  status as ambiguous (review 2, R1: refs are numbered per controller), 500
   entries at most, invalid ones said in the status) become `switch/binary`
   (relay) or `light/binary` + `light/brightness` (dimmer), role `power` (and
   `brightness`). The others are `unknown/binary` read only (role `state`),

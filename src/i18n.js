@@ -105,12 +105,15 @@ export const T = {
           'The gateway answered, but lists no controller.',
           'La passerelle a répondu, mais ne liste aucun contrôleur.',
         ),
-  connected: (controllers, devices, { invalid = [], capped = 0 } = {}) =>
+  connected: (controllers, devices, { invalid = [], ambiguous = [], capped = 0 } = {}) =>
     both(
       [
         `Connected: ${controllers} controller(s), ${devices} device(s) offered in the Discovery tab.`,
         invalid.length > 0
           ? `Ignored in "Outputs declared safe": ${invalid.join(', ')} (expected a ref such as 10, or serial:ref).`
+          : '',
+        ambiguous.length > 0
+          ? `Not applied in "Outputs declared safe": ${ambiguous.slice(0, 10).join(', ')} (ambiguous with several controllers: use serial:ref).`
           : '',
         capped > 0 ? `${capped} output(s) left out: Gladys takes 2000 devices at most.` : '',
       ]
@@ -120,6 +123,9 @@ export const T = {
         `Connecté : ${controllers} contrôleur(s), ${devices} appareil(s) proposé(s) dans l’onglet Découverte.`,
         invalid.length > 0
           ? `Ignoré dans « Sorties déclarées sûres » : ${invalid.join(', ')} (attendu : une référence comme 10, ou série:référence).`
+          : '',
+        ambiguous.length > 0
+          ? `Non appliqué dans « Sorties déclarées sûres » : ${ambiguous.slice(0, 10).join(', ')} (ambigu avec plusieurs contrôleurs : utilisez série:référence).`
           : '',
         capped > 0
           ? `${capped} sortie(s) laissée(s) de côté : Gladys accepte 2000 appareils au plus.`

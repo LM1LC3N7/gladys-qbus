@@ -98,7 +98,8 @@ export const SAFE_OUTPUTS_MAX = 500;
 
 /**
  * The outputs declared safe to switch (relays and dimmers): `<ref>` (the
- * QBUS_OUTPUT parameter of the Discovery tab, on every controller) or
+ * QBUS_OUTPUT parameter of the Discovery tab; it counts ONLY when the gateway
+ * has a single controller, refs being numbered per controller) or
  * `<serial>:<ref>` (one controller), separated by commas, spaces or new
  * lines. Anything else is ignored and listed in `invalid`.
  */
@@ -122,9 +123,17 @@ export function parseSafeOutputs(raw) {
   return { safe, invalid };
 }
 
-/** Whether an output (its controller serial and ref) is declared safe. */
-export const isSafeOutput = (safeOutputs, serial, ref) =>
-  safeOutputs.has(ref) || safeOutputs.has(`${serial}:${ref}`);
+/**
+ * Whether an output (its controller serial and ref) is declared safe. A ref
+ * without a serial counts only when the gateway has one controller (`single`):
+ * with several, "10" would make safe the output 10 of every controller.
+ */
+export const isSafeOutput = (safeOutputs, serial, ref, { single = false } = {}) =>
+  (single && safeOutputs.has(ref)) || safeOutputs.has(`${serial}:${ref}`);
+
+/** The entries without a serial: ambiguous, so applied nowhere, with several controllers. */
+export const ambiguousOutputs = (safeOutputs, controllerCount) =>
+  controllerCount > 1 ? [...safeOutputs].filter((entry) => !entry.includes(':')) : [];
 
 export function normalizeConfig(raw = {}) {
   const c = { ...DEFAULT_CONFIG };

@@ -112,8 +112,8 @@
       "type": "string",
       "label": { "en": "Outputs declared safe", "fr": "Sorties déclarées sûres" },
       "description": {
-        "en": "The refs of the relays and dimmers (parameter QBUS_OUTPUT in the Discovery tab), separated by commas; serial:ref for one controller when there are several. Only loads that may be switched off or on at any time (a lamp, a socket for a lamp).",
-        "fr": "Les références des relais et variateurs (paramètre QBUS_OUTPUT dans l'onglet Découverte), séparées par des virgules ; série:référence pour un seul contrôleur quand il y en a plusieurs. Seulement des charges qu'on peut couper ou allumer à tout moment (une lampe, une prise de lampe)."
+        "en": "The refs of the relays and dimmers (parameter QBUS_OUTPUT in the Discovery tab), separated by commas. With several controllers, write serial:ref (parameter QBUS_CONTROLLER, for example 000123:10): a plain ref is then applied nowhere. Only loads that may be switched off or on at any time (a lamp, a socket for a lamp).",
+        "fr": "Les références des relais et variateurs (paramètre QBUS_OUTPUT dans l'onglet Découverte), séparées par des virgules. Avec plusieurs contrôleurs, écrivez série:référence (paramètre QBUS_CONTROLLER, par exemple 000123:10) : une référence seule n'est alors appliquée nulle part. Seulement des charges qu'on peut couper ou allumer à tout moment (une lampe, une prise de lampe)."
       },
       "placeholder": { "en": "10, 28, 000123:45", "fr": "10, 28, 000123:45" },
       "required": false,

@@ -775,3 +775,38 @@ test('M6: a state kept by the broker (retain) is not a current state', async (t)
   await ctx.tick(TIMINGS.rebuildDebounce);
   assert.ok(discovered(ctx.gladys, relay.external_id), 'a retained configuration is kept');
 });
+
+test('R1: a ref without a serial is applied nowhere when there are several controllers', async (t) => {
+  const lamp = OUTPUTS.relay;
+  const pump = { ...OUTPUTS.relay, id: 'UL10', name: 'Boiler circulator' };
+  const two = config([
+    controller([lamp]),
+    controller([pump], { id: 'UL2', serialNr: '000456', mac: '001122334466' }),
+  ]);
+  const roles = (gladys, serial) =>
+    gladys.fake.discoveredDevices
+      .find((d) => d.external_id === `ext:test-integration:output:${serial}-10`)
+      .features.map((f) => f.category);
+  const ctx = await setup(t, { cfg: { ...UNSAFE, safe_outputs: '10' } });
+  await online(ctx, two);
+  assert.ok(!roles(ctx.gladys, SERIAL).includes('switch'));
+  assert.ok(!roles(ctx.gladys, '000456').includes('switch'), 'the circulator is never a switch');
+  assert.match(
+    ctx.gladys.fake.connectionStatus.message.en,
+    /Not applied in "Outputs declared safe": 10 \(ambiguous with several controllers: use serial:ref\)/,
+  );
+  await ctx.gladys.fake.configUpdated({ ...UNSAFE, safe_outputs: `${SERIAL}:10` });
+  await ctx.tick(0);
+  assert.ok(roles(ctx.gladys, SERIAL).includes('switch'));
+  assert.ok(!roles(ctx.gladys, '000456').includes('switch'));
+  assert.doesNotMatch(ctx.gladys.fake.connectionStatus.message.en, /Not applied/);
+});
+
+test('M8: the test button checks its cooldown before reading the configuration', async (t) => {
+  const ctx = await setup(t);
+  ctx.app.lastTest = Date.now();
+  const reads = ctx.gladys.fake.requests.filter((r) => r.path === '/config').length;
+  const ack = await ctx.gladys.fake.action(ACTIONS.TEST, {});
+  assert.match(JSON.stringify(ack.data), /Already tested/);
+  assert.equal(ctx.gladys.fake.requests.filter((r) => r.path === '/config').length, reads);
+});

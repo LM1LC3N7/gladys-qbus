@@ -614,10 +614,12 @@ export function buildModel({
     throttled: new Set(),
     capped: 0,
   };
+  // A ref without a serial is safe only with a single controller (refs are per controller).
+  const single = controllers.length === 1;
   for (const controller of controllers) {
     for (const output of controller.outputs) {
       const specs = outputFeatures(output, {
-        safe: isSafeOutput(safeOutputs, controller.serial, output.ref),
+        safe: isSafeOutput(safeOutputs, controller.serial, output.ref, { single }),
       });
       if (specs.length === 0) {
         continue;

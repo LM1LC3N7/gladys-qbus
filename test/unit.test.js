@@ -2,7 +2,14 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ceilingOf, normalizeConfig, parseBrokerUrl, parseSafeOutputs } from '../src/config.js';
+import {
+  ambiguousOutputs,
+  ceilingOf,
+  isSafeOutput,
+  normalizeConfig,
+  parseBrokerUrl,
+  parseSafeOutputs,
+} from '../src/config.js';
 import { LIMITS, TIMINGS } from '../src/constants.js';
 import { buildModel, gaugeUnit, hsToRgb, outputFeatures, rgbToHs } from '../src/model.js';
 import { errorReason, isRefusal } from '../src/mqtt.js';
@@ -278,4 +285,15 @@ test('B1: the safe list', () => {
   assert.deepEqual(invalid, ['lamp', '1/2']);
   assert.equal(parseSafeOutputs(undefined).safe.size, 0);
   assert.ok(parseSafeOutputs(Array.from({ length: 600 }, (_, i) => i).join(',')).safe.size <= 500);
+});
+
+test('R1: isSafeOutput', () => {
+  const safe = new Set(['10', '000456:28']);
+  assert.equal(isSafeOutput(safe, '000123', '10', { single: true }), true);
+  assert.equal(isSafeOutput(safe, '000123', '10', { single: false }), false);
+  assert.equal(isSafeOutput(safe, '000123', '10'), false, 'not single unless said');
+  assert.equal(isSafeOutput(safe, '000456', '28', { single: false }), true);
+  assert.equal(isSafeOutput(safe, '000123', '28', { single: false }), false);
+  assert.deepEqual(ambiguousOutputs(safe, 2), ['10']);
+  assert.deepEqual(ambiguousOutputs(safe, 1), []);
 });

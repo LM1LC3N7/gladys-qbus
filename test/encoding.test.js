@@ -9,6 +9,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const MOJIBAKE = /[ÂÃ][\u0080-¿€]|â€/;
+// Control characters on purpose: the test looks for them.
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/;
 const FILES = [
   'gladys-assistant-integration.json',
   'docs/en.md',
@@ -20,6 +23,10 @@ const FILES = [
   'THIRD_PARTY_NOTICES.md',
   'SECURITY.md',
   'src/i18n.js',
+  'src/app.js',
+  'src/config.js',
+  'src/model.js',
+  'src/protocol.js',
 ];
 
 for (const file of FILES) {
@@ -28,10 +35,18 @@ for (const file of FILES) {
     assert.notDeepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'BOM');
     const text = bytes.toString('utf8');
     assert.ok(!text.includes('�'), 'invalid UTF-8');
+    // No control character but new lines and tabs (a NUL makes git and GitHub see a binary file).
+    const control = text.search(CONTROL);
+    assert.equal(control, -1, `control character at offset ${control}`);
     const line = text.split('\n').findIndex((l) => MOJIBAKE.test(l));
     assert.equal(line, -1, `mojibake on line ${line + 1}`);
   });
 }
+
+test('the control pattern catches what it should', () => {
+  assert.match('(\u000000123:10)', CONTROL);
+  assert.doesNotMatch('a\tb\r\nc', CONTROL);
+});
 
 test('the mojibake pattern catches what it should', () => {
   assert.match('FranÃ§ais', MOJIBAKE, 'ç read as Latin-1');

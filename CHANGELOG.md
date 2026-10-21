@@ -26,6 +26,9 @@ the notes of the version's GitHub Release.
   its controller, sent within 3.5 s or refused unsent, "sent, without
   confirmation" when the controller stays silent.
 - Shutters and thermostats are never switches.
+- "Outputs declared safe": a ref without a serial counts only with a single
+  controller; with several, `serial:ref` is needed (a plain ref is applied
+  nowhere and named in the status).
 - One setpoint command at a time per thermostat; retained states ignored;
   2000 devices at most; CONNACK refusals other than credentials tried again.
 - Credentials refused by the broker: a stop kept in `/data` (no secret

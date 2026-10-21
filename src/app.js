@@ -28,7 +28,7 @@
 // -----------------------------------------------------------------------------
 
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
-import { connectionKey, credentialsKey, normalizeConfig } from './config.js';
+import { ambiguousOutputs, connectionKey, credentialsKey, normalizeConfig } from './config.js';
 import { SETPOINT, TIMINGS } from './constants.js';
 import { ERRORS, T, TEST, age, word } from './i18n.js';
 import { CommandRefusal, buildModel, strictNumber } from './model.js';
@@ -393,6 +393,7 @@ export class QbusApp {
       true,
       T.connected(this.controllers.length, this.model.devices.length, {
         invalid: this.config.invalidOutputs,
+        ambiguous: ambiguousOutputs(this.config.safeOutputs, this.controllers.length),
         capped: this.model.capped,
       }),
     );
@@ -984,6 +985,11 @@ export class QbusApp {
    * it has. At most every 10 s.
    */
   async testConnection() {
+    // The cooldown first: a burst of clicks never reaches the host API either.
+    if (this.now() - this.lastTest < TIMINGS.testCooldown) {
+      return TEST.tooSoon;
+    }
+    this.lastTest = this.now();
     // The saved configuration as it is now (never an older copy: an option turned
     // off since must stay off after the restart below).
     const raw = await this.gladys.getConfig().catch(() => this.rawConfig ?? {});
@@ -991,10 +997,6 @@ export class QbusApp {
     if (config.problem) {
       return T.problem(config.problem);
     }
-    if (this.now() - this.lastTest < TIMINGS.testCooldown) {
-      return TEST.tooSoon;
-    }
-    this.lastTest = this.now();
     const answer = await new Promise((resolve) => {
       let probe;
       let timer;
