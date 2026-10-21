@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-21
+
 ### Added
 
 - Qbus controllers (CTD 3.x) through the Qbus MQTT gateway and the local MQTT
@@ -35,3 +37,6 @@ the notes of the version's GitHub Release.
   there), next tries 15 min, 1 h, 6 h, then every 24 h.
 - Transport badge per device (gateway offline, controller disconnected), a
   "Test the connection" button, messages in French or English.
+
+[Unreleased]: https://github.com/LM1LC3N7/gladys-qbus/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-qbus/releases/tag/v0.1.1
