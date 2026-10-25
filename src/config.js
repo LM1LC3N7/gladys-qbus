@@ -22,7 +22,8 @@ export const DEFAULT_CONFIG = {
   language: 'fr',
 };
 
-const SCHEMES = ['mqtt:', 'mqtts:', 'ws:', 'wss:', 'tcp:', 'ssl:'];
+/** TCP or TLS only (the size guard of src/mqtt.js reads the raw MQTT stream). */
+const SCHEMES = { 'mqtt:': false, 'tcp:': false, 'mqtts:': true, 'ssl:': true };
 
 /** Only `true` (or the text "true") allows: anything else, missing included, refuses. */
 const strictTrue = (value) => value === true || value === 'true';
@@ -42,7 +43,7 @@ export function numberOf(value) {
 
 /**
  * The broker URL, completed: "192.168.1.10" -> "mqtt://192.168.1.10".
- * @returns {{ url: string } | { error: string }}
+ * @returns {{ url: string, host: string, port: number, tls: boolean } | { error: string }}
  */
 export function parseBrokerUrl(raw) {
   const text = typeof raw === 'string' ? raw.trim() : '';
@@ -59,14 +60,24 @@ export function parseBrokerUrl(raw) {
   } catch {
     return { error: 'invalid' };
   }
-  if (!SCHEMES.includes(url.protocol) || !url.hostname) {
+  if (!Object.hasOwn(SCHEMES, url.protocol) || !url.hostname) {
     return { error: 'invalid' };
   }
   if (url.username || url.password) {
     // Credentials belong to their own fields (the secret one is never shown again).
     return { error: 'credentials' };
   }
-  return { url: url.toString().replace(/\/$/, '') };
+  if ((url.pathname && url.pathname !== '/') || url.search || url.hash) {
+    return { error: 'invalid' };
+  }
+  const secure = SCHEMES[url.protocol];
+  return {
+    /** scheme://host[:port]: nothing else, so it may be logged. */
+    url: `${secure ? 'mqtts' : 'mqtt'}://${url.host}`,
+    host: url.hostname.replace(/^\[(.*)\]$/, '$1'),
+    port: url.port ? Number(url.port) : secure ? 8883 : 1883,
+    tls: secure,
+  };
 }
 
 /** The serial number of one controller (digits, as Qbus prints them), or undefined for all. */
@@ -157,6 +168,9 @@ export function normalizeConfig(raw = {}) {
     /** Why the configuration cannot be used (shown in the status), else undefined. */
     problem,
     brokerUrl: broker.url,
+    host: broker.host,
+    port: broker.port,
+    tls: broker.tls,
     username: typeof c.username === 'string' ? c.username.trim().slice(0, 256) : '',
     password: problem ? '' : password,
     // TLS certificates are checked unless the user turns it off.

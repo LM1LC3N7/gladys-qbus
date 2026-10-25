@@ -10,6 +10,21 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Fixed
+
+- The size of the MQTT packets is bounded before they are read: MQTT 5 with
+  `maximumPacketSize` (2 MB, the configuration of the gateway at most;
+  Mosquitto drops larger messages instead of sending them) and a guard on
+  the socket that cuts a packet announced over 2 MB before buffering it.
+  A huge message kept by the broker on a followed topic (120 MB) used to be
+  read in full on every start and kill the container (out of memory) before
+  any command could leave. A broker without MQTT 5 is used in MQTT 3.1.1,
+  said in the status. TCP and TLS only: WebSocket URLs are refused.
+- A CONNECT with credentials closed or left unanswered by the broker counts
+  towards the spaced tries only once the transport opened (TCP connected, or
+  TLS verified): a firewall dropping the packets or a certificate refused is
+  only "unreachable", tried again every 10 s, the password never having left.
+
 ## [0.1.2] - 2026-10-23
 
 ## [0.1.1] - 2026-10-21

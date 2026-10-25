@@ -35,7 +35,7 @@ src/handlers.js    the SDK handlers -> QbusApp (shared with the tests)
 src/app.js         connection, messages, devices, states, commands, test button
 src/protocol.js    Qbus topics, parsers, messages (ported from qbusmqttapi)
 src/model.js       outputs -> Gladys devices, readers and writers (pure)
-src/mqtt.js        mqtt.js client options, error reasons
+src/mqtt.js        mqtt.js over a TCP/TLS socket: packets bounded before they are read
 src/store.js       /data: the stop on refused credentials (never a secret)
 src/publisher.js   states within 300 per minute
 src/config.js      the manifest config_schema, normalized
@@ -55,6 +55,9 @@ src/i18n.js        runtime texts, English and French
   stores it in clear: never claim more, `test/manifest.test.js` checks it).
 - **Untrusted input**: everything from the broker is bounded and
   type-checked; ids are checked before they go into a topic; only own keys.
+  Packets are bounded BEFORE they are read (MQTT 5 `maximumPacketSize` and
+  the `PacketGuard` of src/mqtt.js, `LIMITS.packetBytes`): never a transport
+  the guard cannot read (no WebSocket).
 - **Versions** belong to the Release workflow; **changelog** lines go under
   `## [Unreleased]`.
 - **Texts** are bilingual (English and French), UTF-8 without BOM

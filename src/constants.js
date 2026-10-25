@@ -75,6 +75,11 @@ export const LIMITS = {
   stateBytes: 64 * 1024,
   /** The configuration of the gateway (every output of every controller). */
   configBytes: 2 * 1024 * 1024,
+  /**
+   * The largest MQTT packet accepted from the broker (src/mqtt.js): the
+   * configuration, plus its topic and headers. Cut BEFORE it is read.
+   */
+  packetBytes: 2 * 1024 * 1024 + 8 * 1024,
   /** What one gateway may hold: more is ignored. */
   controllers: 8,
   outputsPerController: 1000,

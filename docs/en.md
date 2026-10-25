@@ -68,7 +68,8 @@ setpoint option and ceiling of this integration do not apply to it.
 ## Configuration
 
 - **MQTT broker address**: the IP address of the broker (`192.168.1.20`,
-  port 1883), or `mqtts://address:8883` in TLS.
+  port 1883), or `mqtts://address:8883` in TLS. TCP or TLS only, no
+  WebSocket (the size guard below reads the raw MQTT stream).
 - **User name** and **Password**: those of the broker, if it asks for them.
   The password is kept by Gladys in its database, never shown again, and sent
   only to your broker. It never goes into the logs nor into `/data`.
@@ -114,10 +115,20 @@ commands**. When it is on:
   other credentials or **Test the connection** tries at once.
 - Broker unreachable, or refusing for another reason (server unavailable,
   identifier rejected): a new try every 10 s.
-- Size of the messages: the integration ignores a configuration over 2 MB
-  and a state over 64 KB, but only once received; MQTT 3.1.1 allows larger
-  packets. Keep the broker for your home automation (set
-  max_packet_size in Mosquitto if other clients use it).
+- Size of the messages: the integration uses MQTT 5 and asks the broker for
+  no packet over 2 MB (the configuration of the gateway at most; Mosquitto
+  honours it and drops larger messages). A packet over 2 MB that still
+  arrives cuts the connection before it is read (a reconnection follows),
+  so a huge message kept by the broker can never fill the memory of the
+  container. With a broker without MQTT 5, the integration uses MQTT 3.1.1
+  and says so in the status: such a message then cuts the connection every
+  time it is sent again (remove it from the broker). A state over 64 KB is
+  ignored.
+- A broker that closes the connection (or stays silent) after receiving the
+  credentials, twice in a row, is treated like refused credentials (the next
+  tries are spaced). A broker never reached (firewall, TLS certificate
+  refused) is only "unreachable", tried again every 10 s: the password
+  never left.
 - A state kept by the broker (retain) is ignored: only the states the gateway
   sends now count.
 - At most 2000 devices (a limit of Gladys): the others are left out and the

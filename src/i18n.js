@@ -4,7 +4,9 @@
 // them ever carries the password of the broker.
 // -----------------------------------------------------------------------------
 
-import { FEATURES as F } from './constants.js';
+import { FEATURES as F, LIMITS } from './constants.js';
+
+const MAX_PACKET_MB = Math.round(LIMITS.packetBytes / (1024 * 1024));
 
 const both = (en, fr) => ({ en, fr });
 
@@ -105,7 +107,11 @@ export const T = {
           'The gateway answered, but lists no controller.',
           'La passerelle a répondu, mais ne liste aucun contrôleur.',
         ),
-  connected: (controllers, devices, { invalid = [], ambiguous = [], capped = 0 } = {}) =>
+  connected: (
+    controllers,
+    devices,
+    { invalid = [], ambiguous = [], capped = 0, protocol3 = false } = {},
+  ) =>
     both(
       [
         `Connected: ${controllers} controller(s), ${devices} device(s) offered in the Discovery tab.`,
@@ -116,6 +122,9 @@ export const T = {
           ? `Not applied in "Outputs declared safe": ${ambiguous.slice(0, 10).join(', ')} (ambiguous with several controllers: use serial:ref).`
           : '',
         capped > 0 ? `${capped} output(s) left out: Gladys takes 2000 devices at most.` : '',
+        protocol3
+          ? `The broker does not support MQTT 5: it does not limit the size of the messages it sends; a message over ${MAX_PACKET_MB} MB cuts the connection.`
+          : '',
       ]
         .filter(Boolean)
         .join(' '),
@@ -129,6 +138,9 @@ export const T = {
           : '',
         capped > 0
           ? `${capped} sortie(s) laissée(s) de côté : Gladys accepte 2000 appareils au plus.`
+          : '',
+        protocol3
+          ? `Le broker ne gère pas MQTT 5 : il ne limite pas la taille des messages qu’il envoie ; un message de plus de ${MAX_PACKET_MB} Mo coupe la connexion.`
           : '',
       ]
         .filter(Boolean)

@@ -51,6 +51,21 @@ container (no Docker on the development PC).
   the list changed is kept (never a lost feature), keeps its state, and a
   command on a hidden switch or light is refused ("not declared safe").
   Colour lights (multicolor) stay lights: LED drivers.
+- **Message size** (lot 15, lesson of gladys-pglab r1): MQTT 5 with
+  `maximumPacketSize: LIMITS.packetBytes` (2 MB + 8 KB: the configuration
+  of the gateway, 8 controllers x 1000 outputs at ~250 bytes, plus topic and
+  headers; Mosquitto 2.0.20 drops a larger message instead of sending it),
+  and a guard on the raw socket (`src/mqtt.js` `PacketGuard`): a packet
+  header announcing more than that cuts the connection before the body is
+  buffered (tested with a fake broker pushing a 200 MB PUBLISH, and for
+  real with Mosquitto 2.0.20 and a 120 MB retained message in a 256 MB
+  container). Hence TCP and TLS only, no WebSocket (the Qbus gateway itself
+  publishes over TCP; the guard reads the raw MQTT stream). A broker
+  answering CONNACK 1 or 132 (no MQTT 5) is used in 3.1.1, said in the
+  status: the guard still applies, but a huge retained message then cuts
+  every connection. A CONNECT with credentials closed or unanswered once the
+  transport opened, twice in a row, counts like a refusal (spaced tries);
+  never before the transport opened (pglab r2, N1).
 - **CONNACK refusals** (review 1, I1): `reconnectOnConnackError: true`, so 1-3
   (protocol, identifier, server unavailable) are tried again every 10 s like
   an unreachable broker; 4, 5, 134, 135 end the client (no mqtt.js

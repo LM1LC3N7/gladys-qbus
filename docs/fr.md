@@ -73,7 +73,8 @@ intégration ne s'y appliquent pas.
 ## Configuration
 
 - **Adresse du broker MQTT** : l'adresse IP du broker (`192.168.1.20`,
-  port 1883), ou `mqtts://adresse:8883` en TLS.
+  port 1883), ou `mqtts://adresse:8883` en TLS. TCP ou TLS seulement, pas de
+  WebSocket (la garde de taille ci-dessous lit le flux MQTT brut).
 - **Utilisateur** et **Mot de passe** : ceux du broker, s'il en demande. Le
   mot de passe est gardé par Gladys dans sa base, jamais réaffiché, et envoyé
   seulement à votre broker. Il ne va jamais dans les journaux ni dans `/data`.
@@ -124,10 +125,20 @@ n'activez pas **Autoriser les commandes de consigne**. Une fois activé :
   réessaie tout de suite.
 - Broker injoignable, ou qui refuse pour une autre raison (serveur
   indisponible, identifiant refusé) : un nouvel essai toutes les 10 s.
-- Taille des messages : l'intégration ignore une configuration de plus de
-  2 Mo et un état de plus de 64 Ko, mais seulement une fois reçus ; MQTT 3.1.1
-  autorise des paquets plus grands. Réservez le broker à votre domotique
-  (réglez max_packet_size dans Mosquitto si d'autres clients l'utilisent).
+- Taille des messages : l'intégration utilise MQTT 5 et demande au broker
+  aucun paquet de plus de 2 Mo (la configuration de la passerelle au plus ;
+  Mosquitto le respecte et écarte les messages plus grands). Un paquet de
+  plus de 2 Mo qui arrive quand même coupe la connexion avant d'être lu (une
+  reconnexion suit) : un message énorme conservé par le broker ne peut jamais
+  remplir la mémoire du conteneur. Avec un broker sans MQTT 5, l'intégration
+  utilise MQTT 3.1.1 et le dit dans le statut : un tel message coupe alors la
+  connexion à chaque renvoi (supprimez-le du broker). Un état de plus de
+  64 Ko est ignoré.
+- Un broker qui ferme la connexion (ou se tait) après avoir reçu les
+  identifiants, deux fois de suite, est traité comme des identifiants
+  refusés (les essais suivants sont espacés). Un broker jamais atteint
+  (pare-feu, certificat TLS refusé) est seulement « injoignable », réessayé
+  toutes les 10 s : le mot de passe n'est pas parti.
 - Un état conservé par le broker (retain) est ignoré : seuls comptent les
   états que la passerelle envoie maintenant.
 - 2000 appareils au plus (une limite de Gladys) : les autres sont laissés de

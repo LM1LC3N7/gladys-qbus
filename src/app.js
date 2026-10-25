@@ -11,6 +11,13 @@
 //     in /data, next tries 15 min, 1 h, 6 h then every 24 h, never in a loop;
 //     saving other credentials or "Test the connection" tries again;
 //   - broker unreachable: mqtt.js tries again every 10 s (a local broker);
+//   - a CONNECT with credentials closed or left unanswered once the transport
+//     opened (TCP connected, or TLS verified: only then has the password
+//     left), twice in a row: counted like refused credentials; a transport
+//     never opened (firewall, certificate refused) is only "unreachable";
+//   - messages are bounded before they are read (src/mqtt.js): MQTT 5 with
+//     maximumPacketSize, and a guard on the socket; a broker without MQTT 5
+//     is used in 3.1.1, said in the status;
 //   - a reconnection to Gladys keeps the MQTT client and the stop, and only
 //     re-sends the status, the Discovery and the badges.
 //
@@ -32,7 +39,7 @@ import { ambiguousOutputs, connectionKey, credentialsKey, normalizeConfig } from
 import { SETPOINT, TIMINGS } from './constants.js';
 import { ERRORS, T, TEST, age, word } from './i18n.js';
 import { CommandRefusal, buildModel, strictNumber } from './model.js';
-import { connectBroker, errorReason, isRefusal } from './mqtt.js';
+import { connectBroker, errorReason, isProtocolRefusal, isRefusal } from './mqtt.js';
 import {
   SUBSCRIPTIONS,
   TOPICS,
@@ -80,6 +87,12 @@ export class QbusApp {
     this.client = null;
     this.generation = 0;
     this.started = false;
+    /** MQTT 5 first; 3.1.1 once the broker answered CONNACK 1 or 132. */
+    this.protocolVersion = 5;
+    /** The last connection error, said in the status when the connection ends on it. */
+    this.lastError = undefined;
+    /** CONNECTs with credentials closed or unanswered in a row (transport opened). */
+    this.unanswered = 0;
     this.resetGateway();
     this.model = buildModel({ controllers: [] });
     this.lastStatus = undefined;
@@ -211,6 +224,9 @@ export class QbusApp {
     this.config = normalizeConfig(raw);
     this.connKey = connectionKey(this.config);
     this.wasConnected = false;
+    this.protocolVersion = 5;
+    this.lastError = undefined;
+    this.unanswered = 0;
     const credentials = credentialsKey(this.config);
     if (
       this.credKey !== undefined &&
@@ -253,17 +269,44 @@ export class QbusApp {
       throttled: this.model.throttled,
     });
     this.publisher.start();
+    /**
+     * A CONNECT left without CONNACK (so far): why, if the attempt ends now.
+     * Armed only once the transport opened (TCP connected, or TLS connected
+     * AND verified: src/mqtt.js says so), since only then may the
+     * credentials have left; cleared by a CONNACK and by every new attempt.
+     */
+    const UNANSWERED = 'the broker closed the connection without answering';
+    let pending;
+    let opened = false;
+    const hooks = {
+      onAttempt: () => {
+        pending = undefined;
+        opened = false;
+      },
+      onOpen: () => {
+        opened = true;
+        pending = UNANSWERED;
+      },
+    };
     let client;
     try {
-      client = this.connect(this.config);
+      client = this.connect(this.config, { protocolVersion: this.protocolVersion, ...hooks });
     } catch (err) {
-      await this.setStatus(false, T.unreachable(errorReason(err)));
+      this.lastError = errorReason(err);
+      await this.setStatus(false, T.unreachable(this.lastError));
       return;
     }
     this.client = client;
     const current = () => generation === this.generation && this.client === client;
+    client.on('packetreceive', (packet) => {
+      if (packet?.cmd === 'connack') {
+        pending = undefined;
+      }
+    });
     client.on('connect', () => {
       if (current()) {
+        this.unanswered = 0;
+        this.lastError = undefined;
         this.onConnect().catch((err) => this.logger.error(`After connection: ${err.message}`));
       }
     });
@@ -276,21 +319,76 @@ export class QbusApp {
       if (!current()) {
         return;
       }
-      const reason = errorReason(err);
+      let reason = errorReason(err);
+      if (err?.message === 'connack timeout' && !opened) {
+        // The transport never opened (a firewall dropping the packets...): nothing left.
+        reason = 'no answer from the broker at the network level';
+      }
+      this.lastError = reason;
       if (isRefusal(err)) {
         this.onRefused(reason).catch((e) => this.logger.error(`After a refusal: ${e.message}`));
         return;
+      }
+      if (isProtocolRefusal(err) && this.protocolVersion === 5) {
+        this.onProtocolRefused().catch((e) => this.logger.error(`MQTT 3.1.1: ${e.message}`));
+        return;
+      }
+      if (err?.message === 'connack timeout' && pending) {
+        pending = 'no answer from the broker to the connection';
       }
       this.warnOnce(`broker:${reason}`, `MQTT broker: ${reason}`);
       this.setStatus(false, T.unreachable(reason));
     });
     client.on('close', () => {
-      if (current() && this.wasConnected) {
+      if (!current()) {
+        return;
+      }
+      if (pending) {
+        const reason = pending;
+        pending = undefined;
+        this.onUnanswered(reason).catch((e) => this.logger.error(`Unanswered: ${e.message}`));
+        return;
+      }
+      if (this.wasConnected) {
+        this.wasConnected = false;
         this.failWaiters();
-        this.setStatus(false, T.lost);
+        // The reason when the connection ended on an error (a message too large...).
+        this.setStatus(false, this.lastError ? T.unreachable(this.lastError) : T.lost);
         this.publishAllTransports().catch(() => {});
       }
     });
+  }
+
+  /**
+   * A CONNECT carrying the credentials was closed or left without answer
+   * once the transport was open (a TLS certificate refused or a TCP
+   * connection never opened does not count: the password never left): the
+   * second time in a row, counted like refused credentials (the next tries
+   * are spaced), so the password is not sent every 10 s to a broker that
+   * swallows it. Without credentials there is nothing to protect.
+   */
+  async onUnanswered(reason) {
+    this.lastError = reason;
+    this.unanswered += 1;
+    if (this.hasCredentials() && this.unanswered >= 2) {
+      this.unanswered = 0;
+      await this.onRefused(`${reason}, twice`);
+      return;
+    }
+    this.warnOnce(`broker:${reason}`, `MQTT broker: ${reason}`);
+    await this.setStatus(false, T.unreachable(reason));
+  }
+
+  hasCredentials() {
+    return Boolean(this.config.username || this.config.password);
+  }
+
+  /** The broker does not speak MQTT 5: 3.1.1, with the size guard of src/mqtt.js only. */
+  async onProtocolRefused() {
+    this.logger.warn('The MQTT broker does not support MQTT 5: using MQTT 3.1.1');
+    this.endClient();
+    this.protocolVersion = 4;
+    await this.connectNow();
   }
 
   /** The broker refused the credentials: stop, and try again later (persisted). */
@@ -343,7 +441,9 @@ export class QbusApp {
   }
 
   async onConnect() {
-    this.logger.info(`Connected to the MQTT broker ${this.config.brokerUrl}`);
+    this.logger.info(
+      `Connected to the MQTT broker ${this.config.brokerUrl} (MQTT ${this.protocolVersion === 5 ? '5' : '3.1.1'})`,
+    );
     this.wasConnected = true;
     if (this.memory.auth.failures > 0) {
       this.memory.auth = { failures: 0, until: 0 };
@@ -395,6 +495,7 @@ export class QbusApp {
         invalid: this.config.invalidOutputs,
         ambiguous: ambiguousOutputs(this.config.safeOutputs, this.controllers.length),
         capped: this.model.capped,
+        protocol3: this.protocolVersion !== 5,
       }),
     );
   }
@@ -1014,56 +1115,75 @@ export class QbusApp {
         }
         resolve(result);
       };
-      try {
-        probe = this.connect(config);
-      } catch (err) {
-        finish({ text: T.unreachable(errorReason(err)) });
-        return;
-      }
+      let protocolVersion = this.protocolVersion;
+      const open = () => {
+        try {
+          probe = this.connect(config, { protocolVersion });
+        } catch (err) {
+          finish({ text: T.unreachable(errorReason(err)) });
+          return;
+        }
+        probe.on('error', (err) => {
+          if (isProtocolRefusal(err) && protocolVersion === 5) {
+            // The broker does not speak MQTT 5: once more in 3.1.1.
+            protocolVersion = 4;
+            probe.removeAllListeners?.();
+            probe.on?.('error', () => {});
+            probe.end(true);
+            open();
+            return;
+          }
+          const reason = errorReason(err);
+          finish({
+            text: isRefusal(err) ? TEST.refused(reason) : T.unreachable(reason),
+            refused: isRefusal(err),
+          });
+        });
+        listen(probe);
+      };
       timer = this.timers.setTimeout(
         () => finish({ text: T.unreachable('timeout') }),
         TIMINGS.connectTimeout + 1000,
       );
-      probe.on('error', (err) => {
-        const reason = errorReason(err);
-        finish({
-          text: isRefusal(err) ? TEST.refused(reason) : T.unreachable(reason),
-          refused: isRefusal(err),
+      const listen = (client) => {
+        client.on('message', (topic, payload) => {
+          if (parseTopic(topic)?.kind !== 'config') {
+            return;
+          }
+          const parsed = parseConfig(payload);
+          if (parsed.error) {
+            return;
+          }
+          const controllers = parsed.controllers.filter(
+            (c) => config.serial === undefined || c.serial === config.serial,
+          );
+          if (controllers.length === 0) {
+            finish({ text: T.noController(config.serial), reached: true });
+            return;
+          }
+          const model = buildModel({
+            externalIds: (type, id) => this.gladys.externalIds(type, id),
+            controllers,
+            safeOutputs: config.safeOutputs,
+          });
+          const outputs = controllers.reduce((n, c) => n + c.outputs.length, 0);
+          finish({
+            text: TEST.ok(controllers.length, outputs, model.devices.length),
+            reached: true,
+          });
         });
-      });
-      probe.on('message', (topic, payload) => {
-        if (parseTopic(topic)?.kind !== 'config') {
-          return;
-        }
-        const parsed = parseConfig(payload);
-        if (parsed.error) {
-          return;
-        }
-        const controllers = parsed.controllers.filter(
-          (c) => config.serial === undefined || c.serial === config.serial,
-        );
-        if (controllers.length === 0) {
-          finish({ text: T.noController(config.serial), reached: true });
-          return;
-        }
-        const model = buildModel({
-          externalIds: (type, id) => this.gladys.externalIds(type, id),
-          controllers,
-          safeOutputs: config.safeOutputs,
+        client.on('connect', () => {
+          this.timers.clearTimeout(timer);
+          timer = this.timers.setTimeout(
+            () => finish({ text: T.noGateway, reached: true }),
+            TIMINGS.testTimeout,
+          );
+          probe.subscribe([TOPICS.config], { qos: 0 }, () => {
+            probe.publish(TOPICS.getConfig, '', { qos: 0, retain: false });
+          });
         });
-        const outputs = controllers.reduce((n, c) => n + c.outputs.length, 0);
-        finish({ text: TEST.ok(controllers.length, outputs, model.devices.length), reached: true });
-      });
-      probe.on('connect', () => {
-        this.timers.clearTimeout(timer);
-        timer = this.timers.setTimeout(
-          () => finish({ text: T.noGateway, reached: true }),
-          TIMINGS.testTimeout,
-        );
-        probe.subscribe([TOPICS.config], { qos: 0 }, () => {
-          probe.publish(TOPICS.getConfig, '', { qos: 0, retain: false });
-        });
-      });
+      };
+      open();
     });
     if (answer.reached && this.memory?.auth.failures > 0) {
       // The credentials work again: the stop is lifted and the integration reconnects.

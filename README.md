@@ -16,7 +16,7 @@ User documentation: [docs/en.md](docs/en.md) · [docs/fr.md](docs/fr.md).
 
 ```
 Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (QbusApp)
-                                  ├─ src/mqtt.js       mqtt.js client, nothing queued offline
+                                  ├─ src/mqtt.js       mqtt.js client over a guarded socket (packets bounded), nothing queued
                                   ├─ src/protocol.js   Qbus topics, parsers, messages (qbusmqttapi)
                                   ├─ src/model.js      outputs -> Gladys devices (pure)
                                   ├─ src/store.js      /data: the stop on refused credentials (no secret)

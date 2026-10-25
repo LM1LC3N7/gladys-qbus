@@ -183,8 +183,23 @@ test('the model: stable ids, no switch for shutters and thermostats', () => {
 });
 
 test('the configuration is normalized', () => {
-  assert.deepEqual(parseBrokerUrl('192.168.1.2'), { url: 'mqtt://192.168.1.2' });
-  assert.deepEqual(parseBrokerUrl('mqtts://broker.lan:8883'), { url: 'mqtts://broker.lan:8883' });
+  assert.deepEqual(parseBrokerUrl('192.168.1.2'), {
+    url: 'mqtt://192.168.1.2',
+    host: '192.168.1.2',
+    port: 1883,
+    tls: false,
+  });
+  assert.deepEqual(parseBrokerUrl('mqtts://broker.lan:8883'), {
+    url: 'mqtts://broker.lan:8883',
+    host: 'broker.lan',
+    port: 8883,
+    tls: true,
+  });
+  assert.equal(parseBrokerUrl('ssl://[::1]').host, '::1');
+  assert.equal(parseBrokerUrl('tcp://host:1884').port, 1884);
+  // The guard of src/mqtt.js reads the raw stream: no WebSocket.
+  assert.equal(parseBrokerUrl('ws://host').error, 'invalid');
+  assert.equal(parseBrokerUrl('mqtt://host/path').error, 'invalid');
   assert.equal(parseBrokerUrl('mqtt://u:p@host').error, 'credentials');
   assert.equal(parseBrokerUrl('http://host').error, 'invalid');
   assert.equal(parseBrokerUrl(42).error, 'empty');
