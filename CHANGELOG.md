@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-25
+
 ### Fixed
 
 - The size of the MQTT packets is bounded before they are read: MQTT 5 with
@@ -55,6 +57,7 @@ the notes of the version's GitHub Release.
 - Transport badge per device (gateway offline, controller disconnected), a
   "Test the connection" button, messages in French or English.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-qbus/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/LM1LC3N7/gladys-qbus/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/LM1LC3N7/gladys-qbus/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/LM1LC3N7/gladys-qbus/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/LM1LC3N7/gladys-qbus/releases/tag/v0.1.1
